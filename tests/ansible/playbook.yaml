@@ -1,0 +1,118 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Initialize global failed tasks list
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Ensure global_failed_tasks is an empty list
+      ansible.builtin.set_fact:
+        global_failed_tasks: []
+      run_once: true
+
+- name: Test ACI Image
+  hosts: localhost
+  become: yes
+
+  tasks:
+    - name: Import Tests for Common Roles
+      ansible.builtin.include_role:
+       name: "{{item}}"
+      loop:
+        - common
+        - docker
+        - gcloud_cli
+        - gcs_fuse
+        - gvnic
+        - lmod
+        - os_configs
+        - spack
+        - manifest
+
+    - name: Import Test for Cloud Monitoring
+      ansible.builtin.include_role:
+        name: cloud_monitoring
+      when: not install_slurm
+
+    - name: Import Test for nvidia_stack
+      ansible.builtin.include_role:
+        name: nvidia_stack
+      when: install_nvidia_stack
+
+    - name: Import Test for slurm
+      ansible.builtin.include_role:
+        name: slurm
+      when: install_slurm
+
+    - name: Import Test for openmpi
+      ansible.builtin.include_role:
+        name: ompi
+      when: install_slurm
+
+    - name: Import Tests for CPUs
+      ansible.builtin.include_role:
+        name: rdma
+      when: hw_type == "cpu"
+
+    - name: Import Tests for GPUs
+      ansible.builtin.include_role:
+        name: nccl_gib
+      when: hw_type == "gpu"
+
+    - name: Import Tests for Rocky Specific Packages
+      ansible.builtin.include_role:
+       name: "{{item}}"
+      loop:
+        - google-hpc-compute
+        - selinux
+      when: ansible_os_family == "RedHat"
+
+    - name: Install python3-venv
+      ansible.builtin.apt:
+        name: python3-venv
+        state: present
+      when: hw_type == "gpu" and not install_slurm
+
+    - name: Run Transformer Test
+      ansible.builtin.include_role:
+        name: nemo-tests
+      when: hw_type == "gpu" and not install_slurm
+
+    - name: Run NCCL Test
+      ansible.builtin.include_role:
+        name: nccl-tests
+      when: hw_type == "gpu" and not install_slurm
+
+    - name: Dump collected failed task results
+      ansible.builtin.debug:
+        msg: |
+          --- FAILED TASK SUMMARY ---
+          {% if global_failed_tasks | length > 0 %}
+          The following tasks failed across your managed hosts:
+          {% for item in global_failed_tasks %}
+          --------------------------------------------------
+          Role:   {{ item.role | default('N/A') }}
+          Task:   "{{ item.task }}"
+          Module: {{ item.module | default('N/A') }}
+          Error:  "{{ item.msg }}"
+          Stderr: "{{ item.stderr }}"
+          {% endfor %}
+          --------------------------------------------------
+          {% else %}
+          No task failures were recorded during role execution.
+          {% endif %}
+
+    - name: Fail the playbook and hence the startup script if any task failed.
+      fail: msg="There were one or more errors in the tests"
+      when: global_failed_tasks | length > 0

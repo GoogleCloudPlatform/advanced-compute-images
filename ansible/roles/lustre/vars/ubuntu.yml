@@ -1,0 +1,9 @@
+# Copyright 2026 Google LLC
+#
+---
+lustre_repo_url_debian: "https://us-apt.pkg.dev/projects/lustre-client-binaries"
+lustre_packages:
+  - dkms
+  - lustre-client-modules-dkms
+  - lustre-client-utils
+  - libjson-c-dev

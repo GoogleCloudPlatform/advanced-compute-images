@@ -1,0 +1,221 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Block for {{ ansible_role_name }} tasks
+  block:
+  - name: Create Python virtual environment
+    ansible.builtin.command:
+      cmd: python3 -m venv --system-site-packages transformer_test_venv
+      chdir: "/tmp"
+    changed_when: false
+
+  - name: Ensure pip is latest in the virtualenv
+    ansible.builtin.pip:
+      name: pip
+      state: latest
+      virtualenv: "/tmp/transformer_test_venv"
+      virtualenv_command: "python3 -m venv" # Ensures use of stdlib venv
+      virtualenv_site_packages: yes        # Matches your --system-site-packages flag
+
+  - name: Install test dependencies
+    ansible.builtin.pip:
+      name: 
+        - transformers==4.49.0
+        - datasets
+        - torch
+        - accelerate
+      virtualenv: "/tmp/transformer_test_venv"
+
+  - name: Create DDP-aware test script
+    ansible.builtin.copy:
+      dest: "/tmp/test_pytorch_textgen.py"
+      content: |
+        import os
+        import time
+        import torch
+        from datasets import Dataset
+        from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
+        # Safe defaults for single-node
+        os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+        os.environ.setdefault("MASTER_ADDR", os.getenv("MASTER_ADDR", "127.0.0.1"))
+        os.environ.setdefault("MASTER_PORT", os.getenv("MASTER_PORT", "29500"))
+        local_rank = int(os.getenv("LOCAL_RANK", "-1"))
+        world_size = int(os.getenv("WORLD_SIZE", "1"))
+        is_distributed = world_size > 1
+        is_main = (local_rank in (-1, 0))
+        if torch.cuda.is_available():
+            if local_rank >= 0:
+                torch.cuda.set_device(local_rank)
+                device = torch.device(f"cuda:{local_rank}")
+            else:
+                device = torch.device("cuda:0")
+        else:
+            device = torch.device("cpu")
+        def log0(*args, **kwargs):
+            if is_main:
+                print(*args, **kwargs)
+        print(f"PyTorch version: {torch.__version__}")
+        print(f"CUDA available: {torch.cuda.is_available()}")
+        print(f"CUDA version: {torch.version.cuda}")
+        if torch.cuda.is_available():
+            try:
+                n = torch.cuda.device_count()
+                print(f"Number of GPUs: {n}")
+                for i in range(n):
+                    if is_main:
+                        print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+            except Exception as e:
+                print(f"GPU query failed: {e}")
+        model_name = "distilgpt2"
+        try:
+            if is_main:
+                print(f"Loading tokenizer for {model_name}...")
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            if is_main:
+                print(f"Loading model {model_name}...")
+            model = AutoModelForCausalLM.from_pretrained(model_name)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            model.config.pad_token_id = tokenizer.eos_token_id
+        except Exception as e:
+            print(f"Failed to load model/tokenizer {model_name}: {e}")
+            raise SystemExit(1)
+        model.to(device)
+        log0(f"Loaded model {model_name} to device: {model.device}")
+        def generate_dummy_data():
+            return {"text": ["This is a test sentence for text generation training." for _ in range(32)]}
+        dummy_dataset = Dataset.from_dict(generate_dummy_data())
+        def tokenize_function(examples):
+            res = tokenizer(examples["text"], padding="max_length", truncation=True, max_length=64)
+            res["labels"] = res["input_ids"]
+            return res
+        try:
+            tokenized_datasets = dummy_dataset.map(tokenize_function, batched=True)
+            tokenized_datasets = tokenized_datasets.remove_columns(["text"])
+            tokenized_datasets.set_format("torch")
+        except Exception as e:
+            print(f"Failed to tokenize dataset: {e}")
+            raise SystemExit(1)
+        training_args = TrainingArguments(
+            output_dir="./test_trainer_output",
+            overwrite_output_dir=True,
+            num_train_epochs=1,
+            per_device_train_batch_size=2,   # per-GPU batch
+            gradient_accumulation_steps=1,
+            save_strategy="no",
+            logging_steps=10,
+            report_to=[],
+            optim="adamw_torch",
+            ddp_backend="nccl",
+            ddp_find_unused_parameters=False,
+        )
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=tokenized_datasets,
+            tokenizer=tokenizer,
+        )
+        log0("Starting training for 1 epoch (DDP enabled)." if is_distributed else "Starting training for 1 epoch.")
+        start_time = time.time()
+        try:
+            trainer.train()
+        except Exception as e:
+            print(f"Error during training: {e}")
+            raise SystemExit(1)
+        end_time = time.time()
+        log0(f"Finished Training. Time taken: {end_time - start_time:.2f} seconds")
+        if is_main:
+            log0("Performing a quick generation test...")
+            input_text = "The weather today is"
+            inputs = tokenizer(input_text, return_tensors="pt").to(device)
+            try:
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=15,
+                    num_return_sequences=1,
+                    do_sample=True,
+                    top_k=50,
+                    top_p=0.95,
+                    pad_token_id=tokenizer.eos_token_id
+                )
+                generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                print(f"Input: {input_text}")
+                print(f"Generated: {generated_text}")
+            except Exception as e:
+                print(f"Error during generation: {e}")
+                raise SystemExit(1)
+        print("PyTorch Text Generation test completed successfully.")
+    changed_when: false
+
+  - name: Detect Number of GPUs
+    ansible.builtin.shell:
+      cmd: nvidia-smi -L | wc -l
+    register: num_gpus_raw
+    changed_when: false
+    failed_when: false
+
+  - name: Set fact for num_gpus
+    ansible.builtin.set_fact:
+      num_gpus: "{{ num_gpus_raw.stdout | trim | int }}"
+
+  - name: Run single-GPU training
+    ansible.builtin.command:
+      cmd: ./transformer_test_venv/bin/python3 test_pytorch_textgen.py
+      chdir: "/tmp"
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:{{ ansible_env.LD_LIBRARY_PATH | default('') }}"
+    when: num_gpus | int < 2
+    register: nemo_single_output
+
+  - name: Display single-GPU training output
+    ansible.builtin.debug:
+      var: nemo_single_output.stdout_lines
+    when: num_gpus | int < 2
+
+  - name: Run multi-GPU DDP training
+    ansible.builtin.command:
+      cmd: >
+        ./transformer_test_venv/bin/python3 -m torch.distributed.run
+        --nproc_per_node={{ num_gpus }}
+        --master_addr 127.0.0.1
+        --master_port 29500
+        test_pytorch_textgen.py
+      chdir: "/tmp"
+    environment:
+      LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:{{ ansible_env.LD_LIBRARY_PATH | default('') }}"
+    when: num_gpus | int >= 2
+    register: nemo_multi_output
+
+  - name: Display multi-GPU DDP training output
+    ansible.builtin.debug:
+      var: nemo_multi_output.stdout_lines
+    when: num_gpus | int >= 2
+
+  rescue:
+  - name: Use the failure_recorder role to log this failure
+    ansible.builtin.include_role:
+      name: common_failure_recorder
+
+  always:
+  - name: Clean up file
+    ansible.builtin.file:
+      path: "/tmp/test_pytorch_textgen.py"
+      state: absent
+
+  - name: Clean up venv
+    ansible.builtin.file:
+      path: "/tmp/transformer_test_venv"
+      state: absent

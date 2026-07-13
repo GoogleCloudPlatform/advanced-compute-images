@@ -1,0 +1,51 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Ensure git and zip are installed
+  ansible.builtin.package:
+    name:
+      - git
+      - zip
+    state: present
+  become: true
+  ignore_errors: true 
+
+- name: Create source code mirrors directory
+  ansible.builtin.file:
+    path: "{{ source_code_mirrors_dir }}"
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Create temporary directory for cloning
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: mirrors
+  register: temp_dir
+
+- name: Initialize mirror URL cache
+  ansible.builtin.set_fact:
+    mirror_url_cache: {}
+
+- name: Download and zip source code mirrors
+  include_tasks: clone_and_zip.yml
+  loop: "{{ source_code_mirrors }}"
+  loop_control:
+    loop_var: mirror
+
+- name: Clean up temporary root directory
+  ansible.builtin.file:
+    path: "{{ temp_dir.path }}"
+    state: absent
+  become: true

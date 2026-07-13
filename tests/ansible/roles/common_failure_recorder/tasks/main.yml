@@ -1,0 +1,29 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Record failure in role {{ ansible_role_name }}
+  ansible.builtin.set_fact:
+    # Append to the global list, delegating to localhost
+    global_failed_tasks: "{{ global_failed_tasks | default([]) + \
+                            [{'role': ansible_role_name,
+                              'task': ansible_failed_task.get('name', 'Unknown Task'),
+                              'module': ansible_failed_task.get('action', 'Unknown Module'),
+                              'msg': ansible_failed_result.get('msg', 'No specific error message'),
+                              'stderr': ansible_failed_result.get('stderr', 'N/A') }] }}"
+  delegate_to: localhost
+  run_once: true # Ensures set_fact runs once per failure event on localhost
+
+- name: Debug caught error in {{ ansible_role_name }}
+  ansible.builtin.debug:
+    msg: "Caught an error in role '{{ ansible_role_name }}'. Continuing..."

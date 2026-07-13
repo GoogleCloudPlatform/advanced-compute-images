@@ -1,0 +1,7 @@
+# Copyright 2026 Google LLC
+#
+---
+lustre_repo_url: "https://us-yum.pkg.dev/projects/lustre-client-binaries/lustre-client-rocky-9"
+lustre_packages:
+  - lustre-client-dkms
+  - lustre-client

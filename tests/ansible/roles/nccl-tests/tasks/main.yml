@@ -1,0 +1,120 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Block for {{ ansible_role_name }} tasks
+  block:
+  - name: Check if CUDA is installed
+    ansible.builtin.stat:
+      path: /usr/local/cuda
+    register: cuda_dir
+
+  - name: Fail if CUDA is not installed
+    ansible.builtin.fail:
+      msg: "CUDA not found at /usr/local/cuda"
+    when: not cuda_dir.stat.exists
+
+  - name: Install git if missing
+    ansible.builtin.apt:
+      name: git
+      state: present
+      update_cache: yes
+    when: ansible_os_family == "Debian"
+
+  - name: Install build-essential if make is missing
+    ansible.builtin.apt:
+      name: build-essential
+      state: present
+    when: ansible_os_family == "Debian"
+
+  - name: Install OpenMPI if missing
+    ansible.builtin.apt:
+      name:
+        - openmpi-bin
+        - libopenmpi-dev
+      state: present
+    when: ansible_os_family == "Debian"
+
+  - name: Clone nccl-tests
+    ansible.builtin.git:
+      repo: https://github.com/NVIDIA/nccl-tests.git
+      dest: "/tmp/nccl-tests"
+      version: master
+
+  - name: Build nccl-tests
+    ansible.builtin.shell:
+      cmd: make clean && make -j $(nproc) CUDA_HOME=/usr/local/cuda
+      chdir: "/tmp/nccl-tests"
+    changed_when: true
+
+  - name: Detect Number of GPUs
+    ansible.builtin.shell:
+      cmd: nvidia-smi -L | wc -l
+    register: num_gpus_raw
+    changed_when: false
+    failed_when: false
+
+  - name: Set fact for num_gpus
+    ansible.builtin.set_fact:
+      num_gpus: "{{ num_gpus_raw.stdout | trim | int }}"
+
+  - name: Determine default interface for NCCL
+    ansible.builtin.shell:
+      cmd: ip -o -4 route show to default | awk '{print $5}' | head -n 1
+    register: default_iface
+    changed_when: false
+
+  - name: Run single-GPU NCCL test
+    ansible.builtin.command:
+      cmd: ./build/all_reduce_perf -b 8 -e 1M -f 2 -g 1
+      chdir: "/tmp/nccl-tests"
+    environment:
+      NCCL_DEBUG: INFO
+      NCCL_IB_DISABLE: "1"
+      NCCL_SOCKET_IFNAME: "{{ default_iface.stdout }}"
+      LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:{{ ansible_env.LD_LIBRARY_PATH | default('') }}"
+    when: num_gpus | int == 1
+    register: nccl_single_output
+
+  - name: Display single-GPU NCCL test output
+    ansible.builtin.debug:
+      var: nccl_single_output.stdout_lines
+    when: num_gpus | int == 1
+
+  - name: Run multi-GPU NCCL test (without MPI)
+    ansible.builtin.command:
+      cmd: ./build/all_reduce_perf -b 8 -e 1M -f 2 -g {{ num_gpus }}
+      chdir: "/tmp/nccl-tests"
+    environment:
+      NCCL_DEBUG: INFO
+      NCCL_IB_DISABLE: "1"
+      NCCL_SOCKET_IFNAME: "{{ default_iface.stdout }}"
+      LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:{{ ansible_env.LD_LIBRARY_PATH | default('') }}"
+    when: num_gpus | int >= 2
+    register: nccl_multi_output
+
+  - name: Display multi-GPU NCCL test output
+    ansible.builtin.debug:
+      var: nccl_multi_output.stdout_lines
+    when: num_gpus | int >= 2
+
+  rescue:
+  - name: Use the failure_recorder role to log this failure
+    ansible.builtin.include_role:
+      name: common_failure_recorder
+
+  always:
+  - name: Clean up nccl-tests directory
+    ansible.builtin.file:
+      path: "/tmp/nccl-tests"
+      state: absent

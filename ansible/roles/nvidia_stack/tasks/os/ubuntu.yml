@@ -1,0 +1,260 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+- name: Set DEBIAN_FRONTEND to noninteractive in /etc/environment
+  ansible.builtin.lineinfile:
+    path: /etc/environment
+    line: 'DEBIAN_FRONTEND=noninteractive'
+    create: yes
+    state: present
+# ---------- Install CUDA ----------
+- name: Download CUDA installer from NVIDIA
+  ansible.builtin.get_url:
+    url: "{{ cuda_runfile_url }}"
+    dest: "{{ nvidia_installation_path }}/{{ cuda_installer_file_name }}"
+    mode: '0755'
+  register: cuda_download
+  changed_when: cuda_download.changed
+- name: Run CUDA installer
+  ansible.builtin.command:
+    cmd: "{{ nvidia_installation_path }}/{{ cuda_installer_file_name }} --silent --toolkit"
+  args:
+    creates: /usr/local/cuda-{{ cuda_version }}
+- name: Create apt preference to prevent Nsight tools from NVIDIA repo
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/99-nvidia-cuda-exclude-nsight.pref
+    mode: '0644'
+    owner: root
+    group: root
+    content: |
+      Package: nsight-compute
+      Pin: release l=NVIDIA CUDA
+      Pin-Priority: -1
+
+      Package: nsight-systems
+      Pin: release l=NVIDIA CUDA
+      Pin-Priority: -1
+
+      Package: *
+      Pin: release l=NVIDIA CUDA
+      Pin-Priority: 400
+
+  become: yes
+
+# ---------- Remove local Nsight Install ----------
+# The following tasks remove Nsight components from the local CUDA installation path.
+# This ensures that Nsight tools installed by the CUDA runfile are removed.
+- name: Find versioned Nsight directories
+  ansible.builtin.find:
+    paths: "/usr/local/cuda-{{ cuda_version.split('.')[:2] | join('.') }}"
+    patterns:
+      - "nsight-compute-*"
+      - "nsight-systems-*"
+    file_type: directory
+  register: nsight_dirs
+  become: yes
+
+- name: Remove versioned Nsight directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ nsight_dirs.files }}"
+  become: yes
+  when: nsight_dirs.matched > 0
+  loop_control:
+    label: "{{ item.path }}"
+
+# Remove Nsight binaries/symlinks from bin (as these names are usually stable)
+# and clean up any other Nsight-related files.
+- name: Remove Nsight binaries and plugins
+  ansible.builtin.file:
+    path: "/usr/local/cuda-{{ cuda_version.split('.')[:2] | join('.') }}/{{ item }}"
+    state: absent
+  loop:
+    - bin/ncu
+    - bin/ncu-ui
+    - bin/nsight-sys
+    - bin/nsys
+    - bin/nsys-ui
+    - bin/nsight_ee_plugins_manage.sh
+    - nsightee_plugins
+  become: yes
+
+- name: Add CUDA lib path to ld.so.conf.d
+  ansible.builtin.lineinfile:
+    path: /etc/ld.so.conf.d/nvidia-cuda.conf
+    line: "/usr/local/cuda/lib64"
+    create: yes
+    owner: root
+    group: root
+    mode: '0644'
+  notify: run ldconfig
+
+# Section: NVIDIA Container Toolkit Installation
+- name: Add NVIDIA Container Toolkit GPG key
+  ansible.builtin.apt_key:
+    url: https://nvidia.github.io/libnvidia-container/gpgkey
+    keyring: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    state: present
+- name: Add NVIDIA Container Toolkit repository
+  ansible.builtin.shell:
+    cmd: >
+      curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list |
+      sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' |
+      tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+  args:
+    creates: /etc/apt/sources.list.d/nvidia-container-toolkit.list
+- name: Create apt preference to block broken nvidia-container-toolkit version
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/block-broken-nvidia-container
+    mode: '0644'
+    owner: root
+    group: root
+    content: |
+      Package: nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1
+      Pin: version 1.17.7-1
+      Pin-Priority: 100
+  become: yes
+- name: Update apt cache after adding NVIDIA Container Toolkit repo
+  ansible.builtin.apt:
+    update_cache: yes
+
+- name: Install NVIDIA Container Toolkit
+  ansible.builtin.apt:
+    name:
+      - "nvidia-container-toolkit={{ nvidia_container_toolkit_version }}"
+      - "nvidia-container-toolkit-base={{ nvidia_container_toolkit_version }}"
+      - "libnvidia-container-tools={{ nvidia_container_toolkit_version }}"
+      - "libnvidia-container1={{ nvidia_container_toolkit_version }}"
+    state: present
+    update_cache: no
+
+# ---------- Install NVIDIA Driver Components ----------
+- name: Install NVIDIA Driver packages for the running kernel
+  ansible.builtin.apt:
+    name: "{{ nvidia_packages }}"
+    state: present
+  vars:
+    base_packages:
+      - "linux-modules-nvidia-{{ nvidia_driver_package_version }}-open-{{ ansible_kernel }}"
+      - "nvidia-compute-utils-{{ nvidia_driver_package_version }}"
+      - "nvidia-kernel-common-{{ nvidia_driver_package_version }}"
+      - "nvidia-utils-{{ nvidia_driver_package_version }}"
+      - "libnvidia-cfg1-{{ nvidia_driver_package_version }}"
+      - "libnvidia-nscq-{{ nvidia_driver_package_version.split('-')[0] }}"
+    arm_packages:
+      - "nvidia-imex-{{ nvidia_driver_package_version.split('-')[0] }}"
+    nvidia_packages: "{{ base_packages + (arm_packages if ansible_architecture in ['aarch64', 'arm64'] else []) }}"
+  notify: Reload SystemD
+
+# ---------- Configure NVIDIA Persistence Mode ----------
+- name: Create nvidia-persistenced override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/nvidia-persistenced.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: yes
+
+- name: Configure nvidia-persistenced override for persistence mode
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/nvidia-persistenced.service.d/persistence_mode.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/bin/nvidia-persistenced --user nvidia-persistenced --verbose
+  become: yes
+  notify: Reload SystemD
+
+
+# ---------- Install Fabric Manager ----------
+
+- name: Download Fabric Manager installer
+  ansible.builtin.get_url:
+    url: "https://developer.download.nvidia.com/compute/cuda/repos/{{ ansible_distribution | lower }}{{ ansible_distribution_major_version }}04/{{ 'sbsa' if ansible_architecture == 'aarch64' else 'x86_64' }}/{{ fabricmanager_deb }}"
+    dest: "{{ nvidia_installation_path }}/{{ fabricmanager_deb }}"
+    mode: '0755'
+  register: fabricmanager_download
+  changed_when: fabricmanager_download.changed
+
+- name: Install Fabric Manager from .deb
+  ansible.builtin.apt:
+    deb: "{{ nvidia_installation_path }}/{{ fabricmanager_deb }}"
+  become: yes
+
+# ---------- Install NVIDIA DOCA ----------
+- name: Install NVIDIA DOCA (Data Center Infrastructure-on-a-Chip Architecture)
+  block:
+    - name: Add NVIDIA DOCA GPG key
+      ansible.builtin.get_url:
+        url: "https://linux.mellanox.com/public/repo/doca/GPG-KEY-Mellanox.pub"
+        dest: "/usr/share/keyrings/GPG-KEY-Mellanox.pub"
+        mode: '0644'
+      become: yes
+
+    - name: Add NVIDIA DOCA repository
+      ansible.builtin.shell:
+        cmd: >
+          echo "deb [signed-by=/usr/share/keyrings/GPG-KEY-Mellanox.pub] {{ doca_repo_url }} /" |
+          tee /etc/apt/sources.list.d/doca.list
+      args:
+        creates: /etc/apt/sources.list.d/doca.list
+      become: yes
+
+    - name: Update apt cache after adding DOCA repo
+      ansible.builtin.apt:
+        update_cache: yes
+      become: yes
+
+    - name: Install DOCA OFED
+      ansible.builtin.apt:
+        name: doca-ofed
+        state: present
+      become: yes
+  when: install_doca
+
+# ---------- Disable GPU services ----------
+- name: Disable NVIDIA GPU services by default (enable during boot on GPU nodes)
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  become: yes
+  loop:
+    - nvidia-persistenced.service
+
+- name: Delete non-distributable files after NVIDIA stack installation
+  ansible.builtin.file:
+    path: "/usr/local/cuda/lib64/{{ item }}"
+    state: absent
+  loop:
+    - libOpenCL.so
+    - libOpenCL.so.1
+    - libOpenCL.so.1.0
+    - libOpenCL.so.1.0.0
+    - libaccinj64.so
+    - libaccinj64.so.12.8
+    - libaccinj64.so.12.8.57
+    - libcufilt.a
+    - libcuinj64.so
+    - libcuinj64.so.12.8
+    - libcuinj64.so.12.8.5
+    - libcuinj64.so.12.8.57
+    - libmetis_static.a
+  become: yes

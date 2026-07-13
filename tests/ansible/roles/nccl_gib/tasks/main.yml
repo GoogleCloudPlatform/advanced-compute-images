@@ -1,0 +1,88 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Block for {{ ansible_role_name }} tasks
+  block:
+  - name: Check if NCCL/gIB installation directory exists
+    ansible.builtin.stat:
+      path: /usr/local/gib
+    register: gib_install_stat
+    changed_when: false
+
+  - name: Fail if NCCL/gIB installation directory not found
+    ansible.builtin.fail:
+      msg: "NCCL/gIB installation directory NOT found at: /usr/local/gib"
+    when: not gib_install_stat.stat.exists
+
+  - name: Stat the environment setup script
+    ansible.builtin.stat:
+      path: /usr/local/gib/scripts/set_nccl_env.sh
+    register: set_env_script_stat
+    changed_when: false
+
+  - name: Fail if environment setup script not found
+    ansible.builtin.fail:
+      msg: "3. Environment setup script /usr/local/gib/scripts/set_nccl_env.sh NOT found."
+    when: not set_env_script_stat.stat.exists
+
+  - name: Check if nccl_env_path exists
+    ansible.builtin.stat:
+      path: "/etc/profile.d/nccl_env.sh"
+    register: nccl_env_stat
+    tags: validation
+
+  - name: Fail if nccl_env_path does not exist
+    ansible.builtin.fail:
+      msg: "The file nccl_env_path was not found on the host."
+    when: not nccl_env_stat.stat.exists
+    tags: validation
+
+  - name: Slurp the content of nccl_env.sh present in profile.d
+    ansible.builtin.slurp:
+      src: "/etc/profile.d/nccl_env.sh"
+    register: nccl_env_file_slurp
+    failed_when: nccl_env_stat.stat.exists == false
+
+  - name: Gather package facts
+    ansible.builtin.package_facts:
+      manager: auto
+
+  - name: Verify NCCL library and development package versions (Ubuntu)
+    ansible.builtin.assert:
+      that:
+        - "ansible_facts.packages['libnccl2'][0].version is search(nccl_version)"
+        - "ansible_facts.packages['libnccl-dev'][0].version is search(nccl_version)"
+      fail_msg: "Installed NCCL packages do not match expected versions"
+    when: ansible_distribution | lower == 'ubuntu'
+
+  - name: Verify NCCL library and development package versions (Rocky)
+    ansible.builtin.assert:
+      that:
+        - "ansible_facts.packages['libnccl'][0].version == nccl_version.split('-')[0]"
+        - "ansible_facts.packages['libnccl-devel'][0].version == nccl_version.split('-')[0]"
+      fail_msg: "Installed NCCL packages do not match expected versions"
+    when: ansible_distribution | lower == 'rocky'
+
+  - name: Fail when required lines not present inside the script
+    ansible.builtin.assert:
+      that:
+        - "'. /usr/local/gib/scripts/set_nccl_env.sh' in (nccl_env_file_slurp.content | b64decode)"
+        - "'export LD_LIBRARY_PATH=\"/usr/local/gib/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}\"' in (nccl_env_file_slurp.content | b64decode)"
+      fail_msg: |
+        "nccl_env script does not contain both required NCCL environment setup lines"
+
+  rescue:
+  - name: Use the failure_recorder role to log this failure
+    ansible.builtin.include_role:
+      name: common_failure_recorder

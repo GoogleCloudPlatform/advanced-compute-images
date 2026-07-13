@@ -1,0 +1,49 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Block for {{ ansible_role_name }} tasks
+  block:
+  - name: Run modinfo gve and register output
+    ansible.builtin.command: modinfo gve
+    register: modinfo_gve_output
+    changed_when: false
+    failed_when: modinfo_gve_output.rc != 0
+
+  - name: Initialize found_gve_ko flag
+    ansible.builtin.set_fact:
+      found_gve_ko: false
+
+  - name: Check each line for filename ending with gve/gve.ko
+    ansible.builtin.set_fact:
+      found_gve_ko: true
+    when:
+      - item.startswith('filename:')
+      - '"gve/gve.ko" in item.split(":", 1)[1].strip()'
+    loop: "{{ modinfo_gve_output.stdout_lines }}"
+    loop_control:
+      label: "{{ item }}"
+    until: found_gve_ko | bool
+    retries: 1
+
+  - name: Assert that gve/gve.ko was found
+    ansible.builtin.assert:
+      that:
+        - found_gve_ko | bool
+      fail_msg: "GVNIC is not enabled correctly"
+      success_msg: "GVNIC file found."
+
+  rescue:
+  - name: Use the failure_recorder role to log this failure
+    ansible.builtin.include_role:
+      name: common_failure_recorder

@@ -1,0 +1,110 @@
+
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Block for {{ ansible_role_name }} tasks
+  block:
+  - name: Check for NVIDIA GPU existence via lspci
+    ansible.builtin.shell: "lspci | grep -i nvidia"
+    register: lspci_nvidia
+    changed_when: false
+    failed_when: false
+    when: ansible_architecture in ['aarch64', 'arm64']
+
+  - name: Set gpu_present fact
+    ansible.builtin.set_fact:
+      gpu_present: "{{ lspci_nvidia.rc == 0 if 'rc' in lspci_nvidia else false }}"
+  - name: Test CUDA installation
+    ansible.builtin.shell:
+      cmd: "/usr/local/cuda/bin/nvcc --version"
+    register: nvcc_output
+    changed_when: false
+    failed_when: nvcc_output.rc != 0 or not (nvcc_output.stdout | regex_search('Cuda compilation tools'))
+
+  - name: Test NVIDIA Driver Installation
+    ansible.builtin.shell:
+      cmd: "nvidia-smi"
+    register: nvidia_smi_output
+    changed_when: false
+    failed_when: nvidia_smi_output.rc != 0
+    when: gpu_present
+  - name: Display nvidia-smi output
+    ansible.builtin.debug:
+      var: nvidia_smi_output.stdout_lines
+    when: gpu_present
+  - name: Test NVIDIA CUDA Toolkit (nvcc)
+    ansible.builtin.shell:
+      cmd: "/usr/local/cuda/bin/nvcc --version"
+    register: nvcc_output
+    changed_when: false
+    failed_when: nvcc_output.rc != 0 or not (nvcc_output.stdout | regex_search('Cuda compilation tools'))
+
+  - name: Display nvcc version output
+    ansible.builtin.debug:
+      var: nvcc_output.stdout_lines
+
+  - name: Check Fabric Manager Service Status
+    ansible.builtin.shell:
+      cmd: "systemctl is-active nvidia-fabricmanager.service"
+    register: fm_status
+    changed_when: false
+    failed_when: false
+    ignore_errors: true
+
+  - name: Display Fabric Manager service status
+    ansible.builtin.debug:
+      msg: "Fabric Manager service status is: {{ fm_status.stdout | default('inactive') }}"
+
+  - name: Test NVIDIA Container Toolkit - Check CLI version
+    ansible.builtin.command:
+      cmd: "nvidia-ctk --version"
+    register: nct_version_output
+    changed_when: false
+    failed_when: nct_version_output.rc != 0
+
+  - name: Display NVIDIA Container Toolkit version
+    ansible.builtin.debug:
+      var: nct_version_output.stdout_lines
+
+  - name: "Verify status of nvidia-persistenced.service"
+    ansible.builtin.shell:
+      cmd: "systemctl is-enabled nvidia-persistenced.service"
+    register: persistenced_status
+    changed_when: false
+    failed_when: persistenced_status.stdout == 'enabled'
+
+  - name: Display nvidia-persistenced.service status
+    ansible.builtin.debug:
+      msg: "nvidia-persistenced.service status: {{ persistenced_status.stdout }}"
+
+  - name: Test NVIDIA DOCA installation (check for ofed)
+    ansible.builtin.shell:
+      cmd: >-
+        {% if ansible_os_family == "Debian" %}
+        dpkg -l | grep doca-ofed
+        {% elif ansible_os_family == "RedHat" %}
+        rpm -qa | grep doca-ofed
+        {% endif %}
+    register: doca_check
+    changed_when: false
+    failed_when: doca_check.rc != 0
+    when: install_doca | default(false)
+
+
+  rescue:
+  - name: Use the failure_recorder role to log this failure
+    ansible.builtin.include_role:
+      name: common_failure_recorder
+
+

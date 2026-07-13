@@ -1,0 +1,128 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Block for {{ ansible_role_name }} tasks
+  block:
+  - name: Define variables for tests
+    ansible.builtin.set_fact:
+      rdma_pkg_list:
+        - kmod-idpf-irdma
+        - infiniband-diags
+        - perftest
+
+  - name: Verify google-hpc-compute package installation
+    block:
+      - name: Check if google-hpc-compute package is installed
+        ansible.builtin.command: rpm -qi google-hpc-compute
+        register: rpm_check
+        changed_when: false
+        ignore_errors: true
+
+      - name: Fail if google-hpc-compute package is not installed
+        ansible.builtin.fail:
+          msg: "google-hpc-compute package is not installed."
+        when: rpm_check.rc != 0
+
+  - name: Verify google_mpi_tuning command
+    block:
+      - name: Check if google_mpi_tuning command is available
+        ansible.builtin.command: which google_mpi_tuning
+        register: command_check
+        changed_when: false
+        ignore_errors: true
+
+      - name: Fail if google_mpi_tuning command is not available
+        ansible.builtin.fail:
+          msg: "google_mpi_tuning command is not available."
+        when: command_check.rc != 0
+
+  - name: Verify repository configurations
+    block:
+      - name: Check if epel-release is installed
+        ansible.builtin.command: rpm -q epel-release
+        register: epel_check
+        changed_when: false
+        ignore_errors: true
+
+      - name: Fail if epel-release is not installed
+        ansible.builtin.fail:
+          msg: "epel-release is not installed."
+        when: epel_check.rc != 0
+
+      - name: Check if powertools/crb repository is enabled
+        ansible.builtin.command: dnf repolist enabled
+        register: repolist_check
+        changed_when: false
+
+      - name: Fail if powertools repository is not enabled (EL8)
+        ansible.builtin.fail:
+          msg: "powertools repository is not enabled."
+        when:
+          - ansible_distribution_major_version == '8'
+          - "'powertools' not in repolist_check.stdout"
+
+      - name: Fail if crb repository is not enabled (EL9)
+        ansible.builtin.fail:
+          msg: "crb repository is not enabled."
+        when:
+          - ansible_distribution_major_version == '9'
+          - "'crb' not in repolist_check.stdout"
+
+  - name: Verify system configurations
+    block:
+      - name: Check ib_core configuration
+        ansible.builtin.command: grep "options ib_core send_queue_size=8192 recv_queue_size=8192" /etc/modprobe.d/ib_core.conf
+        register: ib_core_check
+        changed_when: false
+        ignore_errors: true
+
+      - name: Fail if ib_core configuration is not correct
+        ansible.builtin.fail:
+          msg: "ib_core configuration is not correct."
+        when: ib_core_check.rc != 0
+
+      - name: Check udev rule for RDMA
+        ansible.builtin.command: grep 'SUBSYSTEM=="module", KERNEL=="rdma_ucm", ACTION=="add", RUN+="/bin/bash -c '\''/usr/sbin/sysctl -w net.rdma_ucm.max_backlog=32768'\''"' /usr/lib/udev/rules.d/99-rdma_ucm.rules
+        register: udev_rule_check
+        changed_when: false
+        ignore_errors: true
+
+      - name: Fail if udev rule for RDMA is not correct
+        ansible.builtin.fail:
+          msg: "udev rule for RDMA is not correct."
+        when: udev_rule_check.rc != 0
+
+- name: Verify RDMA package installations
+  block:
+      - name: Check if IRDMA repos RPM is installed
+        ansible.builtin.command: rpm -q kmod-idpf-irdma
+        register: irdma_repos_check
+        changed_when: false
+        ignore_errors: true
+
+      - name: Fail if IRDMA repos RPM is not installed
+        ansible.builtin.fail:
+          msg: "IRDMA repos RPM is not installed."
+        when: irdma_repos_check.rc != 0
+
+      - name: Check if RDMA packages are installed
+        ansible.builtin.package:
+          name: "{{ rdma_pkg_list }}"
+          state: present
+        check_mode: true
+
+  rescue:
+  - name: Use the failure_recorder role to log this failure
+    ansible.builtin.include_role:
+      name: common_failure_recorder

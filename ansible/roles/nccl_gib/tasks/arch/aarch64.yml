@@ -1,0 +1,68 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Add SystemD unit for NCCL plugin installation
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/nccl-plugin@{{ nccl_gib_version }}.service
+    mode: '0644'
+    content: |
+      [Unit]
+      After=network-online.target docker.service
+      Before=slurmd.service
+      Requires=docker.service
+
+      [Service]
+      Type=oneshot
+      ExecStartPre=/usr/bin/rm -rf /usr/local/gib
+      ExecStartPre=/usr/bin/mkdir -p /usr/local/gib
+      ExecStartPre=/snap/bin/gcloud auth configure-docker --quiet us-docker.pkg.dev
+      ExecStart=/usr/bin/docker run --rm --name nccl-gib-installer --volume /usr/local/gib:/var/lib/gib \
+          us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-arm64:v{{ nccl_gib_version }} install --install-nccl
+      ExecStartPost=/usr/bin/chmod -R a+r /usr/local/gib
+
+      [Install]
+      WantedBy=slurmd.service
+  register: unit_file
+
+- name: Reload SystemD
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: unit_file.changed
+
+- name: Enable NCCL plugin SystemD unit
+  ansible.builtin.service:
+    name: nccl-plugin@{{ nccl_gib_version }}.service
+    state: started
+    enabled: true
+
+- name: "Install NCCL libraries: libnccl2 and libnccl-dev"
+  # Along with nccl-gib plugin, we also install libnccl2 and libnccl-dev
+  # to complete the NCCL stack with validated versions.
+  # Using wildcards for libnccl and libnccl-dev since they are tagged with `+cudaXX.Y`
+  ansible.builtin.apt:
+    name:
+      - "libnccl2={{nccl_version}}*"
+      - "libnccl-dev={{nccl_version}}*"
+    state: present
+    update_cache: yes
+
+- name: Freeze NCCL library packages
+  # We hold the versions of the NCCL libraries to ensure compatibility
+  # and prevent accidental updates during image upgrades.
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - "libnccl2"
+    - "libnccl-dev"

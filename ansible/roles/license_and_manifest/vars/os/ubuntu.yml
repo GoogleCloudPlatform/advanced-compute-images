@@ -1,0 +1,59 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+source_code_mirrors:
+  - name: "apt-transport-https"
+    url: "https://github.com/Debian/apt.git"
+  - name: "ca-certificates"
+    url: "https://salsa.debian.org/debian/ca-certificates.git"
+  - name: "gfortran"
+    url: "https://github.com/gcc-mirror/gcc.git"
+  - name: "git"
+    url: "https://github.com/git/git.git"
+  - name: "gnupg-agent"
+    url: "https://github.com/gpg/gnupg.git"
+  - name: "htop"
+    url: "https://github.com/htop-dev/htop.git"
+  - name: "libjwt"
+    url: "https://github.com/benmcollins/libjwt.git"
+  - name: "libmariadb-dev"
+    url: "https://github.com/mariadb-corporation/mariadb-connector-c.git"
+  - name: "libnuma-dev"
+    url: "https://github.com/numactl/numactl.git"
+  - name: "linux-headers-generic"
+    url: "https://github.com/torvalds/linux.git"
+  - name: "linux-tools-generic"
+    url: "https://github.com/torvalds/linux.git"
+  - name: "lustre-client-utils"
+    url: "https://github.com/lustre/lustre-release.git"
+  - name: "ltrace"
+    url: "https://gitlab.com/cespedes/ltrace.git"
+  - name: "mariadb-server"
+    url: "https://github.com/MariaDB/server.git"
+  - name: "munge"
+    url: "https://github.com/dun/munge.git"
+  - name: "nfs-kernel-server"
+    url: "https://github.com/openwrt/packages.git"
+  - name: "numactl"
+    url: "https://github.com/numactl/numactl.git"
+  - name: "pdsh"
+    url: "https://github.com/chaos/pdsh.git"
+  - name: "software-properties-common"
+    url: "https://git.launchpad.net/software-properties"
+  - name: "strace"
+    url: "https://github.com/strace/strace.git"
+  - name: "valgrind"
+    url: "https://sourceware.org/git/valgrind.git"
+  - name: "vim"
+    url: "https://github.com/vim/vim.git"

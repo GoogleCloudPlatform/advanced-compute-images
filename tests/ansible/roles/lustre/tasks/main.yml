@@ -1,0 +1,75 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+- name: Lustre Role Execution Entry Check
+  ansible.builtin.debug:
+    msg: "Lustre tests are starting to execute..."
+
+- name: Block for {{ ansible_role_name }} tasks
+  block:
+    - name: Check if Lustre client is installed (via lctl)
+      ansible.builtin.shell: |
+        #!/bin/bash
+        if command -v lctl &> /dev/null; then
+          echo "Lustre client is installed (lctl found)."
+          lctl version
+          exit 0
+        else
+          echo "Lustre client is not installed or lctl not found in PATH."
+          exit 1
+        fi
+      register: lustre_check
+      changed_when: false
+
+    - name: Check if Lustre kernel module is built via DKMS
+      ansible.builtin.shell: |
+        #!/bin/bash
+        if command -v dkms &> /dev/null; then
+          echo "Checking dkms status for lustre..."
+          if dkms status | grep -i lustre &> /dev/null; then
+            dkms status | grep -i lustre | grep -i installed
+            if [ $? -eq 0 ]; then
+              echo "Lustre DKMS module is correctly installed."
+              exit 0
+            else
+              echo "Lustre DKMS module found but NOT correctly installed."
+              exit 1
+            fi
+          else
+            echo "Lustre not managed via DKMS, skipping DKMS check."
+            exit 0
+          fi
+        else
+          echo "dkms command not found, skipping DKMS check."
+          exit 0
+        fi
+      register: lustre_dkms_check
+      changed_when: false
+
+    - name: Check if Lustre kernel module can be found
+      ansible.builtin.command: modinfo lustre
+      register: lustre_modinfo_check
+      changed_when: false
+
+    - name: Explicitly log Lustre success
+      ansible.builtin.debug:
+        msg: "SUCCESS: Lustre client is installed (lctl found) and kernel module is available."
+
+  rescue:
+    - name: Use the failure_recorder role to log this failure
+      ansible.builtin.include_role:
+        name: common_failure_recorder
+      vars:
+        test_fail_msg: "Lustre client or kernel module verification failed."

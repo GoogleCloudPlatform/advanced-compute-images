@@ -1,0 +1,64 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Include OS Vars
+  ansible.builtin.include_vars: '{{ item }}'
+  with_first_found:
+  - '{{ ansible_distribution|lower }}-{{ ansible_distribution_version }}.yml'
+  - '{{ ansible_distribution|lower }}-{{ ansible_distribution_major_version }}.yml'
+  - '{{ ansible_distribution|lower }}.yml'
+  - '{{ ansible_os_family|lower }}-{{ ansible_distribution_version }}.yml'
+  - '{{ ansible_os_family|lower }}-{{ ansible_distribution_major_version }}.yml'
+  - '{{ ansible_os_family|lower }}.yml'
+
+- name: Include OS Family Dependent Tasks
+  include_tasks: '{{ item }}'
+  with_first_found:
+  - os/{{ ansible_distribution|lower }}-{{ ansible_distribution_version }}.yml
+  - os/{{ ansible_distribution|lower }}-{{ ansible_distribution_major_version }}.yml
+  - os/{{ ansible_distribution|lower }}.yml
+  - os/{{ ansible_os_family|lower }}-{{ ansible_distribution_version }}.yml
+  - os/{{ ansible_os_family|lower }}-{{ ansible_distribution_major_version }}.yml
+  - os/{{ ansible_os_family|lower }}.yml
+
+- name: Validate Python version
+  ansible.builtin.assert:
+    that:
+      - (python_version == '3' and ansible_facts['python_version'] is version('3.9', '>') ) or (python_version != '3' and python_version is version('3.9', '>') )
+    msg: "Python version must be > 3.9. Specified: {{ python_version }}, System: {{ ansible_facts['python_version'] }}"
+
+- name: Install Packages
+  package:
+    name: '{{common_packages}}'
+    state: latest
+
+
+- name: Add /usr/local/bin to PATH
+  template:
+    src: profile.d/00-local.sh.j2
+    dest: /etc/profile.d/00-local.sh
+
+- name: Add Conf to 'ld.so.conf.d/'
+  template:
+    src: ld.so.conf.d/usr-local.conf.j2
+    dest: /etc/ld.so.conf.d/usr-local.conf
+
+- name: Mark image for first boot
+  copy:
+    content: ""
+    dest: /.google_hpc_firstrun
+    force: false
+    group: root
+    owner: root
+    mode: 0660

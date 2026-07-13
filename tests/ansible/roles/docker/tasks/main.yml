@@ -1,0 +1,57 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Block for {{ ansible_role_name }} tasks
+  block:
+  - name: Check if Docker is accessible from CLI
+    ansible.builtin.shell: |
+      #!/bin/bash
+      # Define err function as gbash.sh is not sourced when using ansible.builtin.shell
+      err() {
+        echo "[$(date +'%Y-%m-%dT%H:%M:%S%z') ERROR]: $*" >&2
+      }
+      echo "Checking Docker Version."
+      docker_version_output=""
+      if docker_version_output=$(docker --version 2>&1); then
+        echo "Docker Version Output:"
+        echo "${docker_version_output}"
+      else
+        exit_code=$?
+        err "FAILURE: 'docker --version' failed with exit code ${exit_code}."
+        exit 1
+      fi
+    register: docker_version_check
+    changed_when: false # This task doesn't change system state
+    failed_when: docker_version_check.rc != 0
+
+  - name: Check if Hello World is running properly on Docker
+    ansible.builtin.shell: |
+      #!/bin/bash
+      sudo systemctl start docker
+      if sudo docker run --rm hello-world; then
+        echo "SUCCESS: Docker client can connect to the daemon, pull images,"
+        echo "and run containers as expected."
+      else
+        local exit_code=$?
+        err "FAILURE: 'docker run hello-world' failed with exit code ${exit_code}."
+        exit 1
+      fi
+    register: docker_run_check
+    changed_when: false # This task doesn't change system state
+    failed_when: docker_run_check.rc != 0
+
+  rescue:
+  - name: Use the failure_recorder role to log this failure
+    ansible.builtin.include_role:
+      name: common_failure_recorder

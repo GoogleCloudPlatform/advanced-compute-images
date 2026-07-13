@@ -1,0 +1,76 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+# This file orchestrates the setup for Rocky Linux based systems.
+# It uses flag files to manage a multi-stage setup process,
+# including a reboot, to ensure proper kernel and driver initialization.
+
+- name: Clear shadow locks
+  ansible.builtin.file:
+    path: "/etc/{{ item }}.lock"
+    state: absent
+  loop:
+    - group
+    - gshadow
+    - passwd
+    - shadow
+    - subgid
+    - subuid
+
+- name: Check if the full HPC installation is complete
+  stat:
+    path: /etc/hpc_installation_complete
+  register: hpc_install_complete
+
+- name: Check if the OS preparation (pre-reboot) is complete
+  stat:
+    path: /etc/hpc_prepare_os_complete
+  register: prepare_os_complete
+  when: not hpc_install_complete.stat.exists
+
+# Stage 1: Prepare OS, including base package updates and RDMA driver installation.
+- name: Run OS Preparation Tasks
+  block:
+    - name: Include OS preparation tasks
+      include_tasks: ../prepare_os.yml
+    - name: Create OS preparation completion flag
+      file:
+        path: /etc/hpc_prepare_os_complete
+        state: touch
+    - name: Trigger reboot to apply changes
+      ansible.builtin.shell: sleep 5 && rm -rf /tmp/ansible && shutdown -r now "Rebooting after OS preparation"
+      async: 1
+      poll: 0
+      ignore_errors: true # Continue even if shutdown command has issues
+  when:
+    - not hpc_install_complete.stat.exists
+    - not prepare_os_complete.stat.exists
+
+# Stage 2: Install Google HPC specific packages and finalize configuration.
+- name: Run Google HPC Installation Tasks
+  block:
+    - name: Include Google HPC installation tasks
+      include_tasks: ../install_google_hpc.yml
+    - name: Create full installation completion flag
+      file:
+        path: /etc/hpc_installation_complete
+        state: touch
+    - name: Remove OS preparation completion flag
+      file:
+        path: /etc/hpc_prepare_os_complete
+        state: absent
+  when:
+    - not hpc_install_complete.stat.exists
+    - prepare_os_complete.stat.exists

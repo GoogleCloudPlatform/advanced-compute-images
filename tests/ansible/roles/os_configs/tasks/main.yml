@@ -1,0 +1,121 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Block for {{ ansible_role_name }} tasks
+  block:
+  - name: Check if unattended-upgrades is disabled
+    ansible.builtin.systemd:
+      name: unattended-upgrades.service
+    register: unattended_status
+    when: ansible_os_family == "Debian"
+    check_mode: yes
+    ignore_errors: yes
+
+  - name: Report unattended-upgrades status
+    ansible.builtin.debug:
+      msg: >-
+        {{ "SUCCESS: unattended-upgrades service is disabled."
+        if not unattended_status.enabled | default(false) else
+        "FAILURE: unattended-upgrades service is enabled." }}
+    when:
+      - ansible_os_family == "Debian"
+      - unattended_status is not failed
+
+  - name: Fail if unattended-upgrades service is enabled
+    ansible.builtin.fail:
+      msg: "FAILURE: unattended-upgrades service is enabled."
+    when:
+      - ansible_os_family == "Debian"
+      - unattended_status is not failed
+      - unattended_status.enabled | default(false)
+
+  - name: Report unattended-upgrades service not found
+    ansible.builtin.debug:
+      msg: "SUCCESS: unattended-upgrades service not found."
+    when:
+      - ansible_os_family == "Debian"
+      - unattended_status is failed
+
+  - name: Check if limits file exists
+    ansible.builtin.stat:
+      path: "/etc/security/limits.d/99-unlimited.conf"
+    register: limits_file_stat
+
+  - name: Fail if limits file does not exist
+    ansible.builtin.fail:
+      msg: "FAILURE: /etc/security/limits.d/99-unlimited.conf does not exist."
+    when: not limits_file_stat.stat.exists
+
+  - name: Verify resource limits configuration
+    when: limits_file_stat.stat.exists
+    block:
+      - name: Slurp limits file
+        ansible.builtin.slurp:
+          src: "/etc/security/limits.d/99-unlimited.conf"
+        register: limits_file_content
+
+      - name: Decode limits file content
+        ansible.builtin.set_fact:
+          limits_content: "{{ limits_file_content.content | b64decode }}"
+
+      - name: Verify memlock limit
+        ansible.builtin.assert:
+          that: "'* - memlock unlimited' in limits_content"
+          fail_msg: "FAILURE: Missing '* - memlock unlimited' in limits file."
+          quiet: yes
+
+      - name: Verify nofile limit
+        ansible.builtin.assert:
+          that: "'* - nofile 1048576' in limits_content"
+          fail_msg: "FAILURE: Missing '* - nofile 1048576' in limits file."
+          quiet: yes
+
+      - name: Verify nproc limit
+        ansible.builtin.assert:
+          that: "'* - nproc unlimited' in limits_content"
+          fail_msg: "FAILURE: Missing '* - nproc unlimited' in limits file."
+          quiet: yes
+
+      - name: Report limits file success
+        ansible.builtin.debug:
+          msg: "SUCCESS: Limits file contains correct settings."
+
+  - name: Check AppArmor kernel parameter (Ubuntu 24+ only)
+    when: ansible_distribution == "Ubuntu" and ansible_distribution_major_version | int >= 24
+    block:
+      - name: Get AppArmor sysctl value
+        ansible.builtin.shell: "sysctl -n kernel.apparmor_restrict_unprivileged_userns"
+        register: apparmor_val_raw
+        changed_when: false
+        check_mode: no
+
+      - name: Clean AppArmor value
+        ansible.builtin.set_fact:
+          apparmor_val: "{{ apparmor_val_raw.stdout | trim }}"
+
+      - name: Assert AppArmor value is 0
+        ansible.builtin.assert:
+          that:
+            - "apparmor_val == '0'"
+          fail_msg: "FAILURE: kernel.apparmor_restrict_unprivileged_userns is '{{ apparmor_val }}', expected '0'."
+          quiet: yes
+
+      - name: Report AppArmor success
+        ansible.builtin.debug:
+          msg: "SUCCESS: kernel.apparmor_restrict_unprivileged_userns is 0."
+
+  rescue:
+  - name: Use the failure_recorder role to log this failure
+    ansible.builtin.include_role:
+      name: common_failure_recorder

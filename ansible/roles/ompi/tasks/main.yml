@@ -1,0 +1,150 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# -----------------------------------------------------------------
+#  Set Spack Initialization Fact
+# -----------------------------------------------------------------
+- name: Set Spack initialization snippet
+  ansible.builtin.set_fact:
+    spack_init: |
+      export SPACK_PYTHON=/opt/spack-venv/bin/python{{ python_version }}
+      . {{ spack_root }}/share/spack/setup-env.sh
+
+# -----------------------------------------------------------------
+# Discover and Register System HPC environment (Slurm, PMIx, etc.)
+# -----------------------------------------------------------------
+- name: Discover System HPC environment
+  become: true
+  ansible.builtin.shell: |
+    SLURM_VERSION={{ slurm_version }}
+    SLURM_PREFIX={{ slurm_prefix }}
+
+    # Get PMIx version and prefix (Fallback to /usr/local/bin)
+    PMIX_VERSION=$(pmix_info --version 2>/dev/null | grep -oP '(?<=version )\d+\.\d+\.\d+' || pmix_info --version 2>/dev/null | awk '{print $NF}' | sed 's/v//' || /usr/local/bin/pmix_info --version 2>/dev/null | grep -oP '(?<=version )\d+\.\d+\.\d+')
+    PMIX_PREFIX=$(pkg-config --variable=prefix pmix 2>/dev/null || echo "/usr/local")
+    # If pmix_info still fails, try to check if the library exists
+    if [ -z "$PMIX_VERSION" ] && [ -f "/usr/local/lib/libpmix.so" ]; then
+        PMIX_VERSION=$(ldd /usr/local/lib/libpmix.so 2>/dev/null | grep -oP 'libpmi\d+\.so\.\d+' | head -n 1 | grep -oP '\d+$' || echo "4.2.9")
+    fi
+
+    if [ -z "$PMIX_VERSION" ]; then
+        PMIX_VERSION={{ pmix_version }}
+    fi
+
+    # Get others (standard /usr)
+    HWLOC_VERSION=$(hwloc-info --version 2>/dev/null | awk '{print $NF}')
+    NUMA_VERSION=$(numactl --version 2>/dev/null | awk '{print $NF}' | sed 's/v//')
+    OPENSSH_VERSION=$(ssh -V 2>&1 | awk '{print $1}' | sed 's/OpenSSH_//' | cut -d ',' -f1)
+
+    # Get Munge version and prefix
+    MUNGE_VERSION=$(munge --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -n 1)
+    MUNGE_PREFIX=$(dirname $(dirname $(which munge 2>/dev/null)) 2>/dev/null)
+
+    cat <<EOF
+    {
+      "slurm_ver": "${SLURM_VERSION:-unknown}",
+      "slurm_path": "${SLURM_PREFIX:-/usr/local}",
+      "pmix_ver": "${PMIX_VERSION:-unknown}",
+      "pmix_path": "${PMIX_PREFIX:-/usr/local}",
+      "hwloc_ver": "${HWLOC_VERSION:-unknown}",
+      "numa_ver": "${NUMA_VERSION:-unknown}",
+      "openssh_ver": "${OPENSSH_VERSION:-unknown}",
+      "munge_ver": "${MUNGE_VERSION:-unknown}",
+      "munge_path": "${MUNGE_PREFIX:-/usr}"
+    }
+    EOF
+  register: hpc_discovery
+  changed_when: false
+
+- name: Parse discovered HPC environment variables
+  ansible.builtin.set_fact:
+    hpc: "{{ hpc_discovery.stdout | from_json }}"
+
+- name: Define Spack externals dynamically
+  ansible.builtin.set_fact:
+    spack_externals:
+      slurm:
+        externals:
+          - spec: "slurm@{{ hpc.slurm_ver }}"
+            prefix: "{{ hpc.slurm_path }}"
+        buildable: False
+      pmix:
+        externals:
+          - spec: "pmix@{{ hpc.pmix_ver }}"
+            prefix: "{{ hpc.pmix_path }}"
+        buildable: False
+      numactl:
+        externals:
+          - spec: "numactl@{{ hpc.numa_ver }}"
+            prefix: /usr
+        buildable: False
+      openssh:
+        externals:
+          - spec: "openssh@{{ hpc.openssh_ver }}"
+            prefix: /usr
+        buildable: False
+      munge:
+        externals:
+          - spec: "munge@{{ hpc.munge_ver }}"
+            prefix: "{{ hpc.munge_path }}"
+        buildable: False
+
+- name: Configure Spack packages.yaml with externals
+  become: true
+  ansible.builtin.template:
+    src: ../../spack/templates/packages.yaml.j2
+    dest: "{{ spack_root }}/etc/spack/packages.yaml"
+    owner: "{{ hpc_user }}"
+    group: spack
+    mode: '0664'
+
+# -----------------------------------------------------------------
+#  Install (Clean Command)
+# -----------------------------------------------------------------
+- name: Install OpenMPI
+  become: true
+  become_user: "{{ hpc_user }}"
+  ansible.builtin.shell: |
+    {{ spack_init }}
+    spack install --use-cache {{ mpi_spec }} \
+      ^pmix@{{ hpc.pmix_ver }} \
+      ^numactl@{{ hpc.numa_ver }}
+  args:
+    executable: /bin/bash
+  register: mpi_install
+  changed_when: "'installed' in mpi_install.stdout"
+
+- name: Push Binary to GCS Cache
+  become: true
+  become_user: "{{ hpc_user }}"
+  ansible.builtin.shell: |
+    {{ spack_init }}
+    MIRROR_NAME="hpc_cache"
+    SPEC="{{ mpi_spec }}"
+
+    if ! spack buildcache check --mirror-url {{ spack_cache_url }} $SPEC ; then
+      spack buildcache push --force "$MIRROR_NAME" $SPEC
+    fi
+  args:
+    executable: /bin/bash
+
+- name: Refresh Lmod modules for OpenMPI
+  ansible.builtin.shell: |
+    {{ spack_init }}
+    # Generate Lua modules specifically for Lmod
+    spack module lmod refresh -y
+  args:
+    executable: /bin/bash
+  become: true
+  become_user: "{{ hpc_user }}"

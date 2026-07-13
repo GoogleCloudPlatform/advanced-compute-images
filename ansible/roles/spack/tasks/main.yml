@@ -1,0 +1,167 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# -----------------------------------------------------------------
+#  Setup Environment
+# -----------------------------------------------------------------
+- name: Include OS Family Dependent Tasks
+  include_tasks: '{{ item }}'
+  with_first_found:
+  - os/{{ ansible_distribution|lower }}-{{ ansible_distribution_version }}.yml
+  - os/{{ ansible_distribution|lower }}-{{ ansible_distribution_major_version }}.yml
+  - os/{{ ansible_distribution|lower }}.yml
+  - os/{{ ansible_os_family|lower }}-{{ ansible_distribution_version }}.yml
+  - os/{{ ansible_os_family|lower }}-{{ ansible_distribution_major_version }}.yml
+  - os/{{ ansible_os_family|lower }}.yml
+
+- name: Ensure HPC User exists
+  become: true
+  ansible.builtin.user:
+    name: "{{ hpc_user }}"
+    shell: /bin/bash
+    state: present
+    create_home: yes
+    groups: "{{ 'sudo' if ansible_os_family == 'Debian' else 'wheel' }}"
+    append: yes
+  when: ansible_os_family in ['Debian', 'RedHat']
+
+- name: Set passwordless sudo for HPC User
+  become: true
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ hpc_user }}"
+    content: "{{ hpc_user }} ALL=(ALL) NOPASSWD:ALL"
+    mode: '0440'
+    validate: 'visudo -cf %s'
+
+- name: Force Clean Spack Directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ spack_root }}"
+    state: absent
+
+- name: Create Spack Group
+  become: true
+  ansible.builtin.group:
+    name: spack
+    state: present
+    gid: 2000
+
+- name: Create Spack Directory with Shared Permissions
+  ansible.builtin.file:
+    path: "{{ spack_root }}"
+    state: directory
+    owner: "{{ hpc_user }}"
+    group: spack
+    mode: '2775'
+  become: true
+
+# -----------------------------------------------------------------
+#  Install Spack
+# -----------------------------------------------------------------
+
+- name: Clone Spack
+  ansible.builtin.git:
+    repo: "{{ spack_repo }}"
+    dest: "{{ spack_root }}"
+    version: "{{ spack_version }}"
+    depth: 1
+  become: true
+  become_user: "{{ hpc_user }}"
+
+# -----------------------------------------------------------------
+#  Add Spack Cache Mirror
+# -----------------------------------------------------------------
+
+- name: Add GCS Binary Cache (Partitioned by OS)
+  become: true
+  become_user: "{{ hpc_user }}"
+  ansible.builtin.shell: |
+    export SPACK_PYTHON=/opt/spack-venv/bin/python{{ python_version }}
+    . {{ spack_root }}/share/spack/setup-env.sh
+
+    # Create a dynamic bucket path based on the OS (e.g., ubuntu-22 or rocky-9)
+    OS_BUCKET="{{ spack_cache_url }}-v{{ spack_release_version }}/{{ ansible_distribution | lower }}-{{ ansible_distribution_major_version }}"
+    MIRROR_NAME="hpc_cache"
+
+    if ! spack mirror list | grep -q "$MIRROR_NAME"; then
+      spack mirror add --scope site "$MIRROR_NAME" "$OS_BUCKET"
+    fi
+
+    spack buildcache update-index "$MIRROR_NAME"
+    spack buildcache keys --install --trust
+  args:
+    executable: /bin/bash
+
+# -----------------------------------------------------------------
+#  Configure Spack (Config)
+# -----------------------------------------------------------------
+- name: Configure Spack install_tree padded_length
+  ansible.builtin.shell: |
+    . {{ spack_root }}/share/spack/setup-env.sh
+    spack config --scope site add config:install_tree:padded_length:128
+  args:
+    executable: /bin/bash
+  become: true
+  become_user: "{{ hpc_user }}"
+
+# -----------------------------------------------------------------
+#  Configure Spack (Compilers)
+# -----------------------------------------------------------------
+- name: Find System Compilers
+  ansible.builtin.shell: |
+    . {{ spack_root }}/share/spack/setup-env.sh
+    spack compiler find --scope site
+  args:
+    executable: /bin/bash
+  become: true
+  become_user: "{{ hpc_user }}"
+  register: compiler_check
+  changed_when: "'Found no new compilers' not in compiler_check.stdout"
+
+
+
+- name: Configure Spack packages.yaml
+  become: true
+  ansible.builtin.template:
+    src: packages.yaml.j2
+    dest: "{{ spack_root }}/etc/spack/packages.yaml"
+    owner: "{{ hpc_user }}"
+    group: spack
+    mode: '0664'
+
+- name: Install HDF5 via Spack
+  ansible.builtin.shell: |
+    export SPACK_PYTHON=/opt/spack-venv/bin/python{{ python_version }}
+    . {{ spack_root }}/share/spack/setup-env.sh
+    spack install hdf5
+  args:
+    executable: /bin/bash
+  become: true
+  become_user: "{{ hpc_user }}"
+
+# -----------------------------------------------------------------
+# System Integration
+# -----------------------------------------------------------------
+- name: Setup Spack profile script for all users
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/profile.d/01-spack.sh
+    content: |
+      # Initialize Spack
+      export SPACK_PYTHON=/opt/spack-venv/bin/python{{ python_version }}
+      export SPACK_ROOT={{ spack_root }}
+      if [ -f "$SPACK_ROOT/share/spack/setup-env.sh" ]; then
+        . $SPACK_ROOT/share/spack/setup-env.sh
+      fi
+    mode: '0644'

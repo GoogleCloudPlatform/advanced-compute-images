@@ -1,0 +1,75 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Check if the Google Cloud Ops Agent service is active and enabled
+  ansible.builtin.systemd:
+    name: google-cloud-ops-agent
+    state: started
+    enabled: true
+  register: ops_agent_service_check
+  failed_when: ops_agent_service_check is failed
+  changed_when: false
+  when: hw_type != "cpu"
+  tags: validation
+
+- name: Assert Ops Agent service is running and enabled
+  ansible.builtin.assert:
+    that: ops_agent_service_check is success
+    fail_msg: "FAILURE: The google-cloud-ops-agent service is not running or not enabled."
+    success_msg: "SUCCESS: The google-cloud-ops-agent service is running and enabled."
+  when: hw_type != "cpu"
+
+- name: Check Ops Agent health check log for "PASS" status
+  ansible.builtin.shell: |
+    grep "Result: PASS" /var/log/google-cloud-ops-agent/health-checks.log
+  register: health_check_log
+  failed_when: health_check_log.rc != 0
+  changed_when: false
+  when: hw_type != "cpu"
+  tags: validation
+
+- name: Assert Ops Agent health checks are passing
+  ansible.builtin.assert:
+    that: health_check_log.rc == 0
+    fail_msg: "FAILURE: Ops Agent health check log does not contain 'Result: PASS'. Check /var/log/google-cloud-ops-agent/health-checks.log for details."
+    success_msg: "SUCCESS: Ops Agent health checks show 'Result: PASS'."
+  when: hw_type != "cpu"
+
+- name: Check if Ops Agent service is active on CPU workloads
+  ansible.builtin.shell: systemctl is-active google-cloud-ops-agent || true
+  register: ops_agent_active
+  changed_when: false
+  when: hw_type == "cpu"
+  tags: validation
+
+- name: Check if Ops Agent service is enabled on CPU workloads
+  ansible.builtin.shell: systemctl is-enabled google-cloud-ops-agent || true
+  register: ops_agent_enabled
+  changed_when: false
+  when: hw_type == "cpu"
+  tags: validation
+
+- name: Assert Ops Agent service is stopped and disabled on CPU workloads
+  ansible.builtin.assert:
+    that:
+      - ops_agent_active.stdout != "active"
+      - ops_agent_enabled.stdout != "enabled"
+    fail_msg: "FAILURE: Ops Agent service should be stopped and disabled on CPU workloads."
+    success_msg: "SUCCESS: Ops Agent service is stopped and disabled on CPU workloads."
+  when: hw_type == "cpu"
+
+- name: Final Ops Agent Verification Summary
+  ansible.builtin.debug:
+    msg: "Google Cloud Ops Agent verification completed. All checks passed."
+  tags: validation

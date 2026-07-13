@@ -1,0 +1,85 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Block for {{ ansible_role_name }} tasks
+  block:
+    - name: Load Main Common Role Variables
+      ansible.builtin.include_vars: "{{ item }}"
+      with_first_found:
+        - files:
+            - '{{ ansible_distribution|lower }}-{{ ansible_distribution_version }}.yml'
+            - '{{ ansible_distribution|lower }}-{{ ansible_distribution_major_version }}.yml'
+            - '{{ ansible_distribution|lower }}.yml'
+            - '{{ ansible_os_family|lower }}-{{ ansible_distribution_version }}.yml'
+            - '{{ ansible_os_family|lower }}-{{ ansible_distribution_major_version }}.yml'
+            - '{{ ansible_os_family|lower }}.yml'
+          paths:
+            - "{{ playbook_dir }}/../../ansible/roles/common/vars"
+      ignore_errors: true
+
+    - name: Gather package facts
+      ansible.builtin.package_facts:
+        manager: auto
+
+    - name: Verify common packages are installed
+      ansible.builtin.assert:
+        that:
+          - "item in ansible_facts.packages"
+        fail_msg: "Required common package {{ item }} is not installed."
+      loop: "{{ common_packages | default([]) }}"
+
+    - name: Check if /etc/profile.d/00-local.sh exists
+      ansible.builtin.stat:
+        path: /etc/profile.d/00-local.sh
+      register: local_profile_stat
+
+    - name: Assert /etc/profile.d/00-local.sh exists
+      ansible.builtin.assert:
+        that: "local_profile_stat.stat.exists"
+        fail_msg: "/etc/profile.d/00-local.sh does not exist."
+
+    - name: Check if /etc/ld.so.conf.d/usr-local.conf exists
+      ansible.builtin.stat:
+        path: /etc/ld.so.conf.d/usr-local.conf
+      register: ld_conf_stat
+
+    - name: Assert /etc/ld.so.conf.d/usr-local.conf exists
+      ansible.builtin.assert:
+        that: "ld_conf_stat.stat.exists"
+        fail_msg: "/etc/ld.so.conf.d/usr-local.conf does not exist."
+
+    - name: Check if firstrun flag exists
+      ansible.builtin.stat:
+        path: /.google_hpc_firstrun
+      register: firstrun_stat
+
+    - name: Assert firstrun flag exists on Debian/Ubuntu (since it remains after boot)
+      ansible.builtin.assert:
+        that:
+          - "firstrun_stat.stat.exists"
+          - "firstrun_stat.stat.mode == '0660'"
+        fail_msg: "Firstrun flag verification failed on Debian/Ubuntu (exists or mode incorrect)."
+      when: ansible_os_family == "Debian"
+
+    - name: Assert firstrun flag does not exist on RedHat/Rocky (since it should be consumed on first boot)
+      ansible.builtin.assert:
+        that:
+          - "not firstrun_stat.stat.exists"
+        fail_msg: "Firstrun flag still exists on RedHat/Rocky VM, indicating first-boot tuning failed to execute or clean up."
+      when: ansible_os_family == "RedHat"
+
+  rescue:
+    - name: Use the failure_recorder role to log this failure
+      ansible.builtin.include_role:
+        name: common_failure_recorder

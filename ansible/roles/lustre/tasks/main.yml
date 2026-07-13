@@ -1,0 +1,84 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Include OS Vars
+  ansible.builtin.include_vars: '{{ item }}'
+  with_first_found:
+  - '{{ ansible_distribution|lower }}-{{ ansible_distribution_version }}.yml'
+  - '{{ ansible_distribution|lower }}-{{ ansible_distribution_major_version }}.yml'
+  - '{{ ansible_distribution|lower }}.yml'
+  - '{{ ansible_os_family|lower }}-{{ ansible_distribution_version }}.yml'
+  - '{{ ansible_os_family|lower }}-{{ ansible_distribution_major_version }}.yml'
+  - '{{ ansible_os_family|lower }}.yml'
+  when: install_lustre
+
+- name: Include OS Family Dependent Tasks
+  include_tasks: '{{ item }}'
+  with_first_found:
+  - os/{{ ansible_distribution|lower }}-{{ ansible_distribution_version }}.yml
+  - os/{{ ansible_distribution|lower }}-{{ ansible_distribution_major_version }}.yml
+  - os/{{ ansible_distribution|lower }}.yml
+  - os/{{ ansible_os_family|lower }}-{{ ansible_distribution_version }}.yml
+  - os/{{ ansible_os_family|lower }}-{{ ansible_distribution_major_version }}.yml
+  - os/{{ ansible_os_family|lower }}.yml
+  when: install_lustre
+
+- name: Wait for DPKG Locks
+  ansible.builtin.shell: >
+    while fuser /var/lib/dpkg/{{ item }} >/dev/null 2>&1; do
+      sleep 5
+    done
+  with_items:
+  - lock
+  - lock-frontend
+  when:
+  - install_lustre
+  - ansible_os_family == 'Debian'
+
+- name: Install Lustre Client Packages
+  package:
+    name: '{{ lustre_packages }}'
+    state: present
+  when:
+  - install_lustre
+  - lustre_packages | length > 0
+
+- name: Ensure Lustre DKMS modules are built for all target kernels
+  ansible.builtin.shell: |
+    set -ex
+    # Find the Lustre module name and version from dkms status (e.g., lustre-client-modules/2.14.0-ddn249)
+    # The || true prevents set -e from killing the script if grep returns nothing.
+    MODULE_INFO=$(dkms status | grep -i lustre | head -n 1 || true)
+    
+    if [ -n "$MODULE_INFO" ]; then
+      MODULE_NAME=$(echo "$MODULE_INFO" | awk -F/ '{print $1}')
+      # Strip any trailing architectures or generic installed branches from the version string correctly (Bash Regex Patch preserved)
+      MODULE_VERSION=$(echo "$MODULE_INFO" | awk -F/ '{print $2}' | awk -F, '{print $1}' | awk -F: '{print $1}')
+      
+      # Build the module natively for any kernel that has headers installed in the image
+      for k in $(ls -1 /lib/modules); do
+        if [ -d "/lib/modules/$k/build" ]; then
+          echo "Building DKMS module $MODULE_NAME version $MODULE_VERSION for kernel $k..."
+          dkms install -m "$MODULE_NAME" -v "$MODULE_VERSION" -k "$k"
+        else
+          echo "Headers missing for $k, skipping DKMS build."
+        fi
+      done
+    else
+      echo "Lustre module not found in dkms status."
+    fi
+  become: yes
+  when:
+  - install_lustre
+  - ansible_os_family == 'Debian'
