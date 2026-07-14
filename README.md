@@ -63,3 +63,4 @@ To build the image defined by `packer/builds/ubuntu-2204-slurm-gpu-dev.pkrvars.h
 ```bash
 gcloud builds submit --project YOUR_PROJECT_ID --config=cloudbuild.yaml --substitutions=_CONFIG_FILE="ubuntu-2204-slurm-gpu-dev.pkrvars.hcl"
 ```
+
