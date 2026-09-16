@@ -49,6 +49,7 @@
         ./configure --prefix=/usr --libdir=/usr/lib64
         make -j$(nproc)
         rm -rf /tmp/libfabric-stage /tmp/libfabric-pkg /tmp/rpms
+        mkdir -p /tmp/rpms /tmp/libfabric-stage
         make install DESTDIR=/tmp/libfabric-stage
       args:
         chdir: /tmp/libfabric
@@ -59,6 +60,8 @@
         dest: /tmp/libfabric.spec
         mode: "0644"
         content: |
+          %define _unpackaged_files_terminate_build 0
+          %define debug_package %{nil}
           Name: libfabric
           Version: {{ rdma_libfabric_version }}
           Release: 1.el9
@@ -71,12 +74,12 @@
           %description
           Custom Libfabric built from source with IDPF/iRDMA verbs support.
           %install
+          mkdir -p %{buildroot}
           cp -a /tmp/libfabric-stage/* %{buildroot}/
           %files
           /usr/bin/*
           /usr/lib64/*
           /usr/include/*
-          /usr/share/man/*/*
 
     - name: Build libfabric RPM package
       ansible.builtin.command: >
@@ -90,6 +93,7 @@
         name: "/tmp/rpms/{{ ansible_facts['architecture'] }}/libfabric-{{ rdma_libfabric_version }}-1.el9.{{ ansible_facts['architecture'] }}.rpm"
         state: present
         disable_gpg_check: true
+        disable_excludes: all
 
     - name: Clean up libfabric build artifacts
       ansible.builtin.file:
@@ -131,7 +135,8 @@
         fi
         ./configure --prefix=/usr $CONFIGURE_FLAGS
         make -j$(nproc)
-        rm -rf /tmp/perftest-stage /tmp/perftest-pkg /tmp/rpms
+        rm -rf /tmp/perftest-stage /tmp/perftest-pkg
+        mkdir -p /tmp/rpms /tmp/perftest-stage
         make install DESTDIR=/tmp/perftest-stage
       args:
         chdir: /tmp/perftest
@@ -142,6 +147,8 @@
         dest: /tmp/perftest.spec
         mode: "0644"
         content: |
+          %define _unpackaged_files_terminate_build 0
+          %define debug_package %{nil}
           Name: perftest
           Version: {{ perftest_rpm_version.stdout | trim }}
           Release: 1.el9
@@ -153,6 +160,7 @@
           %description
           Custom Perftest built from source with IDPF/iRDMA verbs support.
           %install
+          mkdir -p %{buildroot}
           cp -a /tmp/perftest-stage/* %{buildroot}/
           %files
           /usr/bin/*
@@ -170,6 +178,7 @@
         name: "/tmp/rpms/{{ ansible_facts['architecture'] }}/perftest-{{ perftest_rpm_version.stdout | trim }}-1.el9.{{ ansible_facts['architecture'] }}.rpm"
         state: present
         disable_gpg_check: true
+        disable_excludes: all
 
     - name: Clean up perftest and RPM build artifacts
       ansible.builtin.file:

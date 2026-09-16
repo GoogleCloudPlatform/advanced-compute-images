@@ -81,6 +81,12 @@ variable "project_id" {
   description = "GCP project ID."
 }
 
+variable "source_image" {
+  type        = string
+  description = "Source image name for the packer build."
+  default     = ""
+}
+
 variable "source_image_family" {
   type = string
   description = "Source image family for the packer build."

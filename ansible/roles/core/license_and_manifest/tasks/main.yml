@@ -65,7 +65,7 @@
 
     - name: Set Base Image Name Fact
       ansible.builtin.set_fact:
-        base_image_name: "{{ gcloud_image_result.stdout | trim if gcloud_image_result.rc == 0 else 'Not Found' }}"
+        base_image_name: "{{ source_image if (source_image | default('') != '') else (gcloud_image_result.stdout | trim if gcloud_image_result.rc == 0 else 'Not Found') }}"
 
     - name: Get OpenSSL Version
       ansible.builtin.shell: |

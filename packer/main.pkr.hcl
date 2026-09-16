@@ -50,6 +50,7 @@ locals {
     cuda_version             = var.cuda_version
     nccl_gib_version         = var.nccl_gib_version
     nccl_version             = var.nccl_version
+    source_image             = var.source_image
     source_image_family      = var.source_image_family
     source_image_project_id  = var.source_image_project_id
     slurm_version            = var.slurm_version
@@ -101,7 +102,8 @@ source "googlecompute" "image" {
   ssh_username = "ubuntu"
 
   source_image_project_id = [var.source_image_project_id]
-  source_image_family     = var.source_image_family
+  source_image            = var.source_image != "" ? var.source_image : null
+  source_image_family     = var.source_image != "" ? null : var.source_image_family
 
   # Naming
   instance_name = "packer-tmp-${var.build_id}" # For communicator-less

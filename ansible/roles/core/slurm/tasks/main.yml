@@ -32,6 +32,38 @@
         regexp: "\\{\\{min_ansible_version\\}\\}"
         replace: "min_ansible_version"
 
+    - name: Remove kernel role from slurm-gcp playbook to prevent kernel upgrades
+      ansible.builtin.replace:
+        path: /opt/slurm-gcp-repo/ansible/playbook.yml
+        regexp: '^\s*-\s*kernel\s*$'
+        replace: ''
+
+    - name: Patch slurm-gcp ansible/playbook.yml to fix allow_erasing typo for dnf module
+      ansible.builtin.replace:
+        path: /opt/slurm-gcp-repo/ansible/playbook.yml
+        regexp: 'allow_erasing:'
+        replace: 'allowerasing:'
+
+    - name: Patch cuda install_runfile.yml to use standard kernel-headers package name
+      ansible.builtin.replace:
+        path: /opt/slurm-gcp-repo/third_party/ansible/roles/cuda/tasks/install_runfile.yml
+        regexp: 'kernel-headers-\{\{\s*cuda_driver_kernel_version\s*\}\}\*'
+        replace: 'kernel-headers'
+
+    # Targets slurm-gcp 6.13.1 (third_party/ansible/roles/cuda/tasks/install_runfile.yml).
+    # Replaces argv list with command string so an empty use_open_drivers token is not passed to bash.
+    - name: Patch cuda install_runfile.yml to avoid empty argv token when use_open_drivers is false
+      ansible.builtin.replace:
+        path: /opt/slurm-gcp-repo/third_party/ansible/roles/cuda/tasks/install_runfile.yml
+        regexp: '(?ms)^(\s*)command:\s*\n\s*argv:\s*\n\s*-\s*bash\s*\n\s*-\s*["'']?\{\{\s*nvidia_driver_runfile\s*\}\}["'']?\s*\n\s*-\s*--silent\s*\n\s*-\s*--kernel-name\s*=\s*\{\{\s*cuda_driver_kernel_version\s*\}\}\s*\n\s*-\s*["'']?\{\{\s*[''"]-m=kernel-open[''"]\s+if\s+use_open_drivers\s+else\s+[''"]{2}\s*\}\}["'']?\s*\n\s*-\s*["'']?\{\{\s*[''"]--no-drm[''"]\s+if\s+cuda_runfile_disable_nvidia_drm\s+else\s+[''"]{2}\s*\}\}["'']?'
+        replace: |
+          \1command: >-
+          \1  bash {{ '{{' }} nvidia_driver_runfile {{ '}}' }}
+          \1  --silent
+          \1  --kernel-name={{ '{{' }} cuda_driver_kernel_version {{ '}}' }}
+          \1  {{ '{{' }} '-m=kernel-open' if use_open_drivers else '' {{ '}}' }}
+          \1  {{ '{{' }} '--no-drm' if cuda_runfile_disable_nvidia_drm else '' {{ '}}' }}
+
     - name: Enable verbose logging in all roles
       ansible.builtin.shell: |
         find /opt/slurm-gcp-repo/ansible/roles -name "*.yml" -exec sed -i 's/ > \/dev\/null//g' {} +
@@ -155,6 +187,50 @@
         state: present
       when: hw_type == "tpu" and ansible_facts['distribution'] == "Ubuntu"
 
+    - name: Check existence of /usr/bin/ib_send_bw
+      ansible.builtin.stat:
+        path: /usr/bin/ib_send_bw
+      register: ib_send_bw_bin
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Link existing perftest binary to /usr/local/bin/ib_send_bw to satisfy slurm-gcp
+      become: true
+      ansible.builtin.file:
+        src: /usr/bin/ib_send_bw
+        dest: /usr/local/bin/ib_send_bw
+        state: link
+        force: true
+      when:
+        - ansible_facts['os_family'] == "RedHat"
+        - ib_send_bw_bin.stat.exists
+
+    - name: Check existence of package manager configuration files
+      ansible.builtin.stat:
+        path: "{{ conf_path }}"
+        follow: false
+      loop:
+        - /etc/dnf/dnf.conf
+        - /etc/yum.conf
+      loop_control:
+        loop_var: conf_path
+      register: pkg_mgr_confs
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Temporarily comment out exclude in package manager configs for slurm-gcp execution
+      become: true
+      ansible.builtin.replace:
+        path: "{{ conf_entry.stat.path }}"
+        regexp: '^(exclude\s*=.*)$'
+        replace: '#SLURM_PATCH_\1'
+      loop: "{{ pkg_mgr_confs.results | default([]) }}"
+      loop_control:
+        label: "{{ conf_entry.conf_path }}"
+        loop_var: conf_entry
+      when:
+        - ansible_facts['os_family'] == "RedHat"
+        - conf_entry.stat.exists | default(false)
+        - not (conf_entry.stat.islnk | default(false))
+
     - name: Run the slurm-gcp ansible/playbook.yml with provided variables
       ansible.builtin.shell: |
         set -o pipefail
@@ -187,6 +263,21 @@
         create: true
         mode: '0644'
       when: hw_type == "tpu"
+
+    - name: Restore exclude in package manager configs after slurm-gcp execution
+      become: true
+      ansible.builtin.replace:
+        path: "{{ conf_entry.stat.path }}"
+        regexp: '^#SLURM_PATCH_(exclude\s*=.*)$'
+        replace: '\1'
+      loop: "{{ pkg_mgr_confs.results | default([]) }}"
+      loop_control:
+        label: "{{ conf_entry.conf_path }}"
+        loop_var: conf_entry
+      when:
+        - ansible_facts['os_family'] == "RedHat"
+        - conf_entry.stat.exists | default(false)
+        - not (conf_entry.stat.islnk | default(false))
 
     - name: Shred static Munge key to prevent security exposure in base image
       ansible.builtin.shell: |
