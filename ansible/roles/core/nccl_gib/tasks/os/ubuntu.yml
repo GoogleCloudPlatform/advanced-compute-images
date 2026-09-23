@@ -1,0 +1,101 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+- name: Download CUDA keyring
+  ansible.builtin.get_url:
+    url: "https://developer.download.nvidia.com/compute/cuda/repos/{{ ansible_facts['distribution'] | lower }}{{ ansible_facts['distribution_major_version'] }}04/{{
+      'sbsa' if ansible_facts['architecture'] == 'aarch64' else 'x86_64' }}/cuda-keyring_1.1-1_all.deb"
+    dest: "{{ nvidia_installation_path }}/cuda-keyring_1.1-1_all.deb"
+    mode: "0644"
+- name: Install CUDA keyring
+  ansible.builtin.apt:
+    deb: "{{ nvidia_installation_path }}/cuda-keyring_1.1-1_all.deb"
+  become: true
+- name: Update apt cache after adding CUDA repo
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Add Google Cloud apt-key.gpg for repository verification
+  ansible.builtin.apt_key:
+    url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+    keyring: /etc/apt/trusted.gpg.d/cloud.google.gpg
+    state: present
+  register: add_google_key
+
+- name: Wait for APT Lock
+  ansible.builtin.shell: |
+    while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+          fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+          fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+      sleep 5
+    done
+  changed_when: false
+
+- name: Add gpudirect-gib-apt repository to sources.list.d
+  ansible.builtin.apt_repository:
+    repo: "deb https://packages.cloud.google.com/apt gpudirect-gib-apt main"
+    filename: nccl-gib
+    state: present
+  register: add_nccl_repo
+
+- name: "Install NCCL stack: nccl-gib, libnccl2, and libnccl-dev"
+  # Along with nccl-gib, we also install libnccl2 and libnccl-dev
+  # to complete the NCCL stack with validated versions.
+  # Using wildcards since versions may include revision or +cudaXX.Y suffixes.
+  ansible.builtin.apt:
+    name:
+      - "nccl-gib={{ nccl_gib_version }}*"
+      - "libnccl2={{ nccl_version }}*"
+      - "libnccl-dev={{ nccl_version }}*"
+    state: present
+    update_cache: true
+
+- name: Freeze NCCL stack packages
+  # We hold the versions of the entire NCCL stack to ensure compatibility
+  # and prevent accidental updates during image upgrades.
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - "nccl-gib"
+    - "libnccl2"
+    - "libnccl-dev"
+
+- name: Create flag file to bypass startup nccl-gib installation
+  ansible.builtin.file:
+    path: /etc/nccl-gib-installed
+    state: touch
+    mode: "0644"
+
+- name: Ensure NCCL/gIB environment script is configured in /etc/profile.d
+  ansible.builtin.copy:
+    dest: /etc/profile.d/nccl_env.sh
+    content: |
+      # Source the official NCCL/gIB environment script
+      if [ -f /usr/local/gib/scripts/set_nccl_env.sh ]; then
+        . /usr/local/gib/scripts/set_nccl_env.sh
+      fi
+      case ":${LD_LIBRARY_PATH}:" in
+        *":/usr/local/gib/lib64:"*)
+          # /usr/local/gib/lib64 is already in LD_LIBRARY_PATH
+          ;;
+        *)
+          export LD_LIBRARY_PATH="/usr/local/gib/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          ;;
+      esac
+    owner: root
+    group: root
+    mode: "0755" # Make the script executable so it's sourced by /etc/profile
+  become: true

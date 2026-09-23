@@ -30,24 +30,42 @@ steps:
     - |
       set -e
       echo "Starting SBOM generation for image: ${_SOURCE_IMAGE}"
-      echo "SBOM will be uploaded to: ${_SBOM_GCS_PATH}"
 
-      # Install Packer
+      # Install dependencies
       echo "Installing dependencies..."
-      apt-get update && apt-get install -y unzip
+      apt-get update && apt-get install -y unzip curl coreutils
 
+      # Install Packer with SHA-256 checksum verification
       echo "Installing Packer..."
       PACKER_VERSION="1.11.2"
-      curl -LO "https://releases.hashicorp.com/packer/$${PACKER_VERSION}/packer_$${PACKER_VERSION}_linux_amd64.zip"
+      PACKER_SHA256="ced13efc257d0255932d14b8ae8f38863265133739a007c430cae106afcfc45a"
+      curl -sSL -O "https://releases.hashicorp.com/packer/$${PACKER_VERSION}/packer_$${PACKER_VERSION}_linux_amd64.zip"
+      echo "$${PACKER_SHA256}  packer_$${PACKER_VERSION}_linux_amd64.zip" | sha256sum -c -
       unzip -j -o "packer_$${PACKER_VERSION}_linux_amd64.zip" packer -d /usr/bin
       chmod +x /usr/bin/packer
       rm "packer_$${PACKER_VERSION}_linux_amd64.zip"
+      packer --version
+
+      BUILD_ID_VAL="${_BUILD_ID}"
+      if [[ -z "$$BUILD_ID_VAL" ]]; then
+        BUILD_ID_VAL="${BUILD_ID}"
+      fi
+      if [[ -z "$$BUILD_ID_VAL" ]]; then
+        BUILD_ID_VAL="$$(date +%s)"
+      fi
+
+      SBOM_GCS_PATH_VAL="${_SBOM_GCS_PATH}"
+      if [[ -z "$$SBOM_GCS_PATH_VAL" ]]; then
+        SBOM_GCS_PATH_VAL="gs://${PROJECT_ID}-exports/sboms/${_SOURCE_IMAGE}/$${BUILD_ID_VAL}/sbom.spdx.json"
+      fi
+      echo "SBOM will be uploaded to: $${SBOM_GCS_PATH_VAL}"
+
       ZONE="${_ZONE}"
       declare -a PACKER_ARGS
       PACKER_ARGS+=(-var="project_id=${PROJECT_ID}")
       PACKER_ARGS+=(-var="source_image=${_SOURCE_IMAGE}")
-      PACKER_ARGS+=(-var="sbom_gcs_path=${_SBOM_GCS_PATH}")
-      PACKER_ARGS+=(-var="build_id=${_BUILD_ID}")
+      PACKER_ARGS+=(-var="sbom_gcs_path=$${SBOM_GCS_PATH_VAL}")
+      PACKER_ARGS+=(-var="build_id=$${BUILD_ID_VAL}")
 
       if [[ -n "${_MACHINE_TYPE}" ]]; then
         echo "Explicit machine_type requested: ${_MACHINE_TYPE}"
@@ -63,9 +81,9 @@ steps:
       PACKER_ARGS+=(-var="zone=$${ZONE}")
       PACKER_ARGS+=(sbom/)
 
-      echo "Running Packer build with args: ${PACKER_ARGS[@]}"
+      echo "Running Packer build with args: $${PACKER_ARGS[@]}"
       packer init sbom/
-      packer build "${PACKER_ARGS[@]}"
+      packer build "$${PACKER_ARGS[@]}"
       echo "Packer build complete."
 timeout: '1800s'
 options:

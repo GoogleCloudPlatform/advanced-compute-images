@@ -1,0 +1,72 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+- name: Block for TPU tests
+  block:
+  - name: Verify Nsight components are removed
+    ansible.builtin.shell: |
+      CUDA_INSTALL_PATH="/usr/local/cuda"
+      if ls ${CUDA_INSTALL_PATH}/nsight-compute-* 1> /dev/null 2>&1; then
+        echo "Found nsight-compute" && exit 1
+      fi
+      if ls ${CUDA_INSTALL_PATH}/nsight-systems-* 1> /dev/null 2>&1; then
+        echo "Found nsight-systems" && exit 1
+      fi
+      if [ -f "${CUDA_INSTALL_PATH}/bin/ncu" ]; then echo "ncu found" && exit 1; fi
+      if [ -f "${CUDA_INSTALL_PATH}/bin/nsys" ]; then echo "nsys found" && exit 1; fi
+      exit 0
+    changed_when: false
+    ignore_errors: true
+
+  - name: Verify Enroot config Path setup
+    ansible.builtin.command: grep -q "^ENROOT_DATA_PATH\s\+/tmp/\${UID}/data" /etc/enroot/enroot.conf
+    changed_when: false
+
+  - name: Check if OSPO third-party licenses are present
+    ansible.builtin.stat:
+      path: /usr/share/third_party/THIRD_PARTY_NOTICES.txt
+    register: license_stat
+    changed_when: false
+
+  - name: Fail if OSPO licenses not present
+    ansible.builtin.fail:
+      msg: "OSPO third-party licenses not found"
+    when: not license_stat.stat.exists
+
+  - name: Check if Slurm cli_filter/tpu plugin exists
+    ansible.builtin.shell: |
+      if ! find /usr -name "cli_filter_tpu.so" | grep -q .; then
+         exit 1
+      fi
+      exit 0
+    changed_when: false
+    when: install_slurm
+
+  - name: Check if slurm tpu.conf exists
+    ansible.builtin.stat:
+      path: /usr/local/etc/slurm/tpu.conf
+    register: tpu_conf_stat
+    changed_when: false
+    when: install_slurm
+
+  - name: Fail if Slurm tpu.conf does not exist
+    ansible.builtin.fail:
+      msg: "Slurm tpu.conf not found at /usr/local/etc/slurm/tpu.conf"
+    when: install_slurm and not tpu_conf_stat.stat.exists
+
+  rescue:
+  - name: Use the failure_recorder role to log this failure
+    ansible.builtin.include_role:
+      name: common_failure_recorder

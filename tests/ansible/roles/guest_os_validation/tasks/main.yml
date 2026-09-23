@@ -1,0 +1,184 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Block for {{ ansible_role_name }} tasks
+  block:
+    # --------------------------------------------------------------------------
+    # 1. SSH Daemon Security & Configuration (image_security_test / image_configuration_test)
+    # --------------------------------------------------------------------------
+    - name: Check if /etc/ssh/sshd_config exists
+      ansible.builtin.stat:
+        path: /etc/ssh/sshd_config
+      register: sshd_config_stat
+
+    - name: Assert /etc/ssh/sshd_config exists
+      ansible.builtin.assert:
+        that: "sshd_config_stat.stat.exists"
+        fail_msg: "GuestOS Validation Failure: /etc/ssh/sshd_config does not exist"
+
+    - name: Verify SSH daemon configuration security settings
+      when: sshd_config_stat.stat.exists
+      block:
+        - name: Slurp /etc/ssh/sshd_config content
+          ansible.builtin.slurp:
+            src: /etc/ssh/sshd_config
+          register: sshd_config_raw
+
+        - name: Decode sshd_config content
+          ansible.builtin.set_fact:
+            sshd_config_content: "{{ sshd_config_raw.content | b64decode }}"
+
+        - name: Assert PermitRootLogin is not set to yes
+          ansible.builtin.assert:
+            that:
+              - >-
+                not (sshd_config_content is search('(?m)^\s*PermitRootLogin\s+yes\b'))
+            fail_msg: "GuestOS Security Failure: PermitRootLogin is explicitly set to 'yes' in /etc/ssh/sshd_config"
+
+    - name: Check SSH service status
+      ansible.builtin.service_facts:
+
+    - name: Assert SSH service is present and active
+      ansible.builtin.assert:
+        that:
+          - "('ssh.service' in ansible_facts.services and ansible_facts.services['ssh.service'].state == 'running') or \
+             ('sshd.service' in ansible_facts.services and ansible_facts.services['sshd.service'].state == 'running')"
+        fail_msg: "GuestOS Validation Failure: SSH daemon service (ssh/sshd) is not running"
+
+    # --------------------------------------------------------------------------
+    # 2. Essential Guest Environment Packages (image_packages_test)
+    # --------------------------------------------------------------------------
+    - name: Gather system package facts
+      ansible.builtin.package_facts:
+        manager: auto
+
+    - name: Set expected core GuestOS utility packages
+      ansible.builtin.set_fact:
+        expected_guestos_packages:
+          - curl
+          - tar
+          - gzip
+          - pciutils
+          - ethtool
+
+    - name: Assert core utility packages are installed
+      ansible.builtin.assert:
+        that:
+          - "item in ansible_facts.packages"
+        fail_msg: "GuestOS Validation Failure: Required package '{{ item }}' is missing from image"
+      loop: "{{ expected_guestos_packages }}"
+
+    - name: Assert iproute package is installed
+      ansible.builtin.assert:
+        that:
+          - "'iproute' in ansible_facts.packages or 'iproute2' in ansible_facts.packages"
+        fail_msg: "GuestOS Validation Failure: iproute / iproute2 package is missing"
+
+    - name: Assert time synchronization package is installed
+      ansible.builtin.assert:
+        that:
+          - "'chrony' in ansible_facts.packages or 'systemd-timesyncd' in ansible_facts.packages or 'ntp' in ansible_facts.packages"
+        fail_msg: "GuestOS Validation Failure: No time synchronization package (chrony/systemd-timesyncd/ntp) found"
+
+    # --------------------------------------------------------------------------
+    # 3. Network MTU & Interface Configuration (mtu_test)
+    # --------------------------------------------------------------------------
+    - name: Verify default network interface MTU
+      when: ansible_facts['default_ipv4']['mtu'] is defined
+      block:
+        - name: Assert MTU meets minimum GCE standard (>= 1460)
+          ansible.builtin.assert:
+            that:
+              - "ansible_facts['default_ipv4']['mtu'] | int >= 1460"
+            fail_msg: "GuestOS Validation Failure: Default interface MTU is {{ ansible_facts['default_ipv4']['mtu'] }}, expected >= 1460"
+
+    # --------------------------------------------------------------------------
+    # 4. Kernel Network Security Hardening (image_security_test)
+    # --------------------------------------------------------------------------
+    - name: Check accept_source_route sysctl
+      ansible.builtin.shell: "sysctl -n net.ipv4.conf.all.accept_source_route"
+      register: accept_source_route_out
+      changed_when: false
+      check_mode: no
+
+    - name: Assert accept_source_route is disabled (0)
+      ansible.builtin.assert:
+        that:
+          - "accept_source_route_out.stdout | trim == '0'"
+        fail_msg: "GuestOS Security Failure: net.ipv4.conf.all.accept_source_route is {{ accept_source_route_out.stdout | trim }}, expected 0"
+
+    - name: Check accept_redirects sysctl
+      ansible.builtin.shell: "sysctl -n net.ipv4.conf.all.accept_redirects"
+      register: accept_redirects_out
+      changed_when: false
+      check_mode: no
+
+    - name: Assert accept_redirects is disabled (0)
+      ansible.builtin.assert:
+        that:
+          - "accept_redirects_out.stdout | trim == '0'"
+        fail_msg: "GuestOS Security Failure: net.ipv4.conf.all.accept_redirects is {{ accept_redirects_out.stdout | trim }}, expected 0"
+
+    # --------------------------------------------------------------------------
+    # 5. Sensitive File Permissions & Security Hardening (image_security_test)
+    # --------------------------------------------------------------------------
+    - name: Check /etc/shadow permissions
+      ansible.builtin.stat:
+        path: /etc/shadow
+      register: shadow_stat
+
+    - name: Assert /etc/shadow has secure permissions (mode 0000, 0600, or 0640)
+      ansible.builtin.assert:
+        that:
+          - "shadow_stat.stat.exists"
+          - "shadow_stat.stat.mode in ['0000', '0600', '0640']"
+          - "shadow_stat.stat.pw_name == 'root'"
+        fail_msg: "GuestOS Security Failure: /etc/shadow permissions are insecure (mode: {{ shadow_stat.stat.mode }}, owner: {{ shadow_stat.stat.pw_name }})"
+
+    - name: Check /etc/passwd permissions
+      ansible.builtin.stat:
+        path: /etc/passwd
+      register: passwd_stat
+
+    - name: Assert /etc/passwd has standard readable permissions (0644)
+      ansible.builtin.assert:
+        that:
+          - "passwd_stat.stat.exists"
+          - "passwd_stat.stat.mode == '0644'"
+          - "passwd_stat.stat.pw_name == 'root'"
+        fail_msg: "GuestOS Security Failure: /etc/passwd permissions are invalid (mode: {{ passwd_stat.stat.mode }}, owner: {{ passwd_stat.stat.pw_name }})"
+
+    # --------------------------------------------------------------------------
+    # 6. Hostname and Localhost Resolution (image_configuration_test)
+    # --------------------------------------------------------------------------
+    - name: Check /etc/hosts file
+      ansible.builtin.slurp:
+        src: /etc/hosts
+      register: hosts_file_raw
+
+    - name: Decode /etc/hosts content
+      ansible.builtin.set_fact:
+        hosts_file_content: "{{ hosts_file_raw.content | b64decode }}"
+
+    - name: Assert localhost entry exists in /etc/hosts
+      ansible.builtin.assert:
+        that:
+          - "'127.0.0.1' in hosts_file_content"
+          - "'localhost' in hosts_file_content"
+        fail_msg: "GuestOS Configuration Failure: 127.0.0.1 localhost entry missing from /etc/hosts"
+
+  rescue:
+    - name: Use the failure_recorder role to log this failure
+      ansible.builtin.include_role:
+        name: common_failure_recorder

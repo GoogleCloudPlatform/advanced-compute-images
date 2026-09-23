@@ -32,6 +32,12 @@ variable "hw_type" {
   description = "Hardware type (e.g. cpu, gpu)."
 }
 
+variable "tpu_version" {
+  type        = string
+  description = "TPU version (e.g. v6e)."
+  default     = null
+}
+
 variable "release_track" {
   type = string
   description = "Release track (e.g. lts, dev, test)."
@@ -46,7 +52,18 @@ variable "cuda_version" {
 variable "fabric_manager_version" {
   type  = string
   description = "NVIDIA fabric manager version."
-  default = ""
+  default = "580.65.06"
+}
+
+variable "nvidia_driver_package_version" {
+  type    = string
+  default = "580-server"
+}
+
+variable "fabricmanager_deb" {
+  type        = string
+  description = "NVIDIA fabric manager deb package."
+  default     = "nvidia-fabricmanager_580.65.06-1_amd64.deb"
 }
 
 variable "build_number" {
@@ -110,19 +127,21 @@ variable "nccl_version" {
   default = "2.28.9-1"
 }
 
-variable "install_slurm" {
-  type = bool
-  default = false
-}
-
-variable "install_nvidia_stack" {
-  type = bool
-  default = false
+variable "ansible_exclude_roles" {
+  type        = list(string)
+  description = "List of predefined or contrib roles to skip/exclude during execution."
+  default     = []
 }
 
 variable "slurm_version" {
   type = string
-  default = "25.11.4"
+  default = "26.05.4"
+}
+
+variable "build_slurm_from_git_ref" {
+  type        = string
+  default     = "6.13.1"
+  description = "The slurm-gcp repository git ref (tag or branch) to clone for building Slurm."
 }
 
 variable "test_bundle_base64" {
@@ -134,4 +153,10 @@ variable "test_results_gcs_path" {
   type = string
   description = "GCS path to upload test results"
   default = ""
+}
+
+variable "install_dcgm" {
+  type        = bool
+  default     = false
+  description = "Flag to gate NVIDIA DCGM installation pending legal approval."
 }

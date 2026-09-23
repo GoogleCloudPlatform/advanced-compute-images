@@ -64,7 +64,7 @@
         - "ansible_facts.packages['libnccl2'][0].version is search(nccl_version)"
         - "ansible_facts.packages['libnccl-dev'][0].version is search(nccl_version)"
       fail_msg: "Installed NCCL packages do not match expected versions"
-    when: ansible_distribution | lower == 'ubuntu'
+    when: ansible_facts['distribution'] | lower == 'ubuntu'
 
   - name: Verify NCCL library and development package versions (Rocky)
     ansible.builtin.assert:
@@ -72,7 +72,7 @@
         - "ansible_facts.packages['libnccl'][0].version == nccl_version.split('-')[0]"
         - "ansible_facts.packages['libnccl-devel'][0].version == nccl_version.split('-')[0]"
       fail_msg: "Installed NCCL packages do not match expected versions"
-    when: ansible_distribution | lower == 'rocky'
+    when: ansible_facts['distribution'] | lower == 'rocky'
 
   - name: Fail when required lines not present inside the script
     ansible.builtin.assert:

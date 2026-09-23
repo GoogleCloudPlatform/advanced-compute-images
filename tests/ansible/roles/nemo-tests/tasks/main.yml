@@ -176,7 +176,7 @@
       chdir: "/tmp"
     environment:
       CUDA_VISIBLE_DEVICES: "0"
-      LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:{{ ansible_env.LD_LIBRARY_PATH | default('') }}"
+      LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:{{ ansible_facts['env']['LD_LIBRARY_PATH'] | default('') }}"
     when: num_gpus | int < 2
     register: nemo_single_output
 
@@ -195,7 +195,7 @@
         test_pytorch_textgen.py
       chdir: "/tmp"
     environment:
-      LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:{{ ansible_env.LD_LIBRARY_PATH | default('') }}"
+      LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:{{ ansible_facts['env']['LD_LIBRARY_PATH'] | default('') }}"
     when: num_gpus | int >= 2
     register: nemo_multi_output
 

@@ -18,7 +18,7 @@
     ansible.builtin.systemd:
       name: unattended-upgrades.service
     register: unattended_status
-    when: ansible_os_family == "Debian"
+    when: ansible_facts['os_family'] == "Debian"
     check_mode: yes
     ignore_errors: yes
 
@@ -29,14 +29,14 @@
         if not unattended_status.enabled | default(false) else
         "FAILURE: unattended-upgrades service is enabled." }}
     when:
-      - ansible_os_family == "Debian"
+      - ansible_facts['os_family'] == "Debian"
       - unattended_status is not failed
 
   - name: Fail if unattended-upgrades service is enabled
     ansible.builtin.fail:
       msg: "FAILURE: unattended-upgrades service is enabled."
     when:
-      - ansible_os_family == "Debian"
+      - ansible_facts['os_family'] == "Debian"
       - unattended_status is not failed
       - unattended_status.enabled | default(false)
 
@@ -44,7 +44,7 @@
     ansible.builtin.debug:
       msg: "SUCCESS: unattended-upgrades service not found."
     when:
-      - ansible_os_family == "Debian"
+      - ansible_facts['os_family'] == "Debian"
       - unattended_status is failed
 
   - name: Check if limits file exists
@@ -87,12 +87,30 @@
           fail_msg: "FAILURE: Missing '* - nproc unlimited' in limits file."
           quiet: yes
 
+      - name: Verify stack limit
+        ansible.builtin.assert:
+          that: "'* - stack 8192' in limits_content"
+          fail_msg: "FAILURE: Missing '* - stack 8192' in limits file."
+          quiet: yes
+
+      - name: Verify cpu limit
+        ansible.builtin.assert:
+          that: "'* - cpu unlimited' in limits_content"
+          fail_msg: "FAILURE: Missing '* - cpu unlimited' in limits file."
+          quiet: yes
+
+      - name: Verify rtprio limit
+        ansible.builtin.assert:
+          that: "'* - rtprio unlimited' in limits_content"
+          fail_msg: "FAILURE: Missing '* - rtprio unlimited' in limits file."
+          quiet: yes
+
       - name: Report limits file success
         ansible.builtin.debug:
           msg: "SUCCESS: Limits file contains correct settings."
 
   - name: Check AppArmor kernel parameter (Ubuntu 24+ only)
-    when: ansible_distribution == "Ubuntu" and ansible_distribution_major_version | int >= 24
+    when: ansible_facts['distribution'] == "Ubuntu" and ansible_facts['distribution_major_version'] | int >= 24
     block:
       - name: Get AppArmor sysctl value
         ansible.builtin.shell: "sysctl -n kernel.apparmor_restrict_unprivileged_userns"
@@ -114,6 +132,10 @@
       - name: Report AppArmor success
         ansible.builtin.debug:
           msg: "SUCCESS: kernel.apparmor_restrict_unprivileged_userns is 0."
+
+  - name: Import TPU tests
+    ansible.builtin.include_tasks: tpu.yml
+    when: hw_type == "tpu"
 
   rescue:
   - name: Use the failure_recorder role to log this failure

@@ -23,6 +23,9 @@ packer {
 }
 
 locals {
+  has_slurm = var.orchestrator == "slurm" && !contains(var.ansible_exclude_roles, "slurm")
+  has_nvidia_stack = var.hw_type == "gpu" && !contains(var.ansible_exclude_roles, "nvidia_stack")
+
   build_date = formatdate("YYYYMMDD", timestamp())
   ansible_dir = "../ansible"
   ansible_vars = {
@@ -32,19 +35,27 @@ locals {
     hw_type        = var.hw_type
     release_track  = var.release_track
     fabric_manager_version = var.fabric_manager_version
+    nvidia_driver_package_version = var.nvidia_driver_package_version
+    fabricmanager_deb      = var.fabricmanager_deb
     cuda_version   = var.cuda_version
     nccl_gib_version= var.nccl_gib_version
     nccl_version            = var.nccl_version
-    install_slurm   = var.install_slurm
-    install_nvidia_stack = var.install_nvidia_stack
+    install_slurm   = local.has_slurm
+    install_nvidia_stack = local.has_nvidia_stack
+    install_dcgm    = var.install_dcgm
+    exclude_roles           = var.ansible_exclude_roles
+    slurm_version           = var.slurm_version
+    build_slurm_from_git_ref= var.build_slurm_from_git_ref
   }
+
   image_family_parts = compact([
     "aci",
     var.hw_type,
+    var.tpu_version,
     replace(replace(var.image_os, "ubuntu", "u"), "rocky", "rocky-linux-"),
-    var.install_slurm ? "slurm-${join("", slice(split(".", var.slurm_version), 0, 2))}" : null,
-    var.install_nvidia_stack ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
-    var.install_nvidia_stack ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
+    local.has_slurm ? "slurm-${join("", slice(split(".", var.slurm_version), 0, 2))}" : null,
+    local.has_nvidia_stack ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
+    local.has_nvidia_stack ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
     var.cpu_arch == "x86_64" ? "amd64" : (var.cpu_arch == "arm64" ? "arm64" : replace(var.cpu_arch, "_", "-")),
     var.release_track == "nightly" ? var.release_track : null
   ])
@@ -53,9 +64,9 @@ locals {
     "aci",
     var.hw_type,
     replace(replace(var.image_os, "ubuntu", "u"), "rocky", "rocky-linux-"),
-    var.install_slurm ? "slurm-${join("", slice(split(".", var.slurm_version), 0, 2))}" : null,
-    var.install_nvidia_stack ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
-    var.install_nvidia_stack ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
+    local.has_slurm ? "slurm-${join("", slice(split(".", var.slurm_version), 0, 2))}" : null,
+    local.has_nvidia_stack ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
+    local.has_nvidia_stack ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
     var.cpu_arch == "x86_64" ? "amd64" : (var.cpu_arch == "arm64" ? "arm64" : replace(var.cpu_arch, "_", "-")),
   ])
   image_name_val = join("-", local.image_name_parts)
@@ -84,7 +95,7 @@ source "googlecompute" "image" {
   state_timeout = "10m"
 
   accelerator_count = (var.hw_type == "gpu" && var.cpu_arch != "arm64") ? 2 : 0
-  accelerator_type = (var.hw_type == "gpu" && var.cpu_arch != "arm64") ? "projects/${var.project_id}/zones/us-central1-a/acceleratorTypes/nvidia-tesla-t4" : null
+  accelerator_type = (var.hw_type == "gpu" && var.cpu_arch != "arm64") ? "projects/${var.project_id}/zones/${var.zone}/acceleratorTypes/nvidia-tesla-t4" : null
 
   on_host_maintenance = (var.hw_type == "gpu") ? "TERMINATE" : "MIGRATE"
 

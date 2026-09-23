@@ -20,7 +20,7 @@
     register: lspci_nvidia
     changed_when: false
     failed_when: false
-    when: ansible_architecture in ['aarch64', 'arm64']
+    when: ansible_facts['architecture'] in ['aarch64', 'arm64']
 
   - name: Set gpu_present fact
     ansible.builtin.set_fact:
@@ -88,18 +88,55 @@
     ansible.builtin.debug:
       msg: "nvidia-persistenced.service status: {{ persistenced_status.stdout }}"
 
+  - name: Verify NVIDIA DCGM service and hang detection configuration
+    block:
+      - name: "Verify status of nvidia-dcgm.service"
+        ansible.builtin.shell:
+          cmd: "systemctl is-enabled nvidia-dcgm.service"
+        register: dcgm_status
+        changed_when: false
+        failed_when: dcgm_status.stdout == 'enabled'
+        when: ansible_facts['os_family'] == "Debian"
+
+      - name: Display nvidia-dcgm.service status
+        ansible.builtin.debug:
+          msg: "nvidia-dcgm.service status: {{ dcgm_status.stdout }}"
+        when: ansible_facts['os_family'] == "Debian"
+
+      - name: Check if nvidia-dcgm.service exists for hang detection test
+        ansible.builtin.stat:
+          path: /lib/systemd/system/nvidia-dcgm.service
+        register: test_dcgm_service_file
+
+      - name: "Verify DCGM hang detection is disabled in nvidia-dcgm.service"
+        ansible.builtin.shell:
+          cmd: "grep 'DCGM_HANGDETECT_DISABLE=1' /lib/systemd/system/nvidia-dcgm.service"
+        register: dcgm_hangdetect_check
+        changed_when: false
+        failed_when: dcgm_hangdetect_check.rc != 0
+        when: test_dcgm_service_file.stat.exists
+    when: install_dcgm | default(false) | bool
+
   - name: Test NVIDIA DOCA installation (check for ofed)
     ansible.builtin.shell:
       cmd: >-
-        {% if ansible_os_family == "Debian" %}
+        {% if ansible_facts['os_family'] == "Debian" %}
         dpkg -l | grep doca-ofed
-        {% elif ansible_os_family == "RedHat" %}
+        {% elif ansible_facts['os_family'] == "RedHat" %}
         rpm -qa | grep doca-ofed
         {% endif %}
     register: doca_check
     changed_when: false
     failed_when: doca_check.rc != 0
     when: install_doca | default(false)
+
+  - name: Test NVIDIA DCGM installation (check dcgmi version)
+    ansible.builtin.shell:
+      cmd: "dcgmi --version"
+    register: dcgm_version
+    changed_when: false
+    failed_when: dcgm_version.rc != 0
+    when: install_dcgm | default(false) | bool
 
 
   rescue:

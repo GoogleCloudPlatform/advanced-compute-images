@@ -27,47 +27,70 @@ variable "ansible_bundle_base64" {
 }
 
 locals {
-  build_date = formatdate("YYYYMMDD", timestamp())
+  build_date  = formatdate("YYYYMMDD", timestamp())
   ansible_dir = "../ansible"
+
+  # Enforce custom image name if extra roles are provided
+  _validate_image_name = length(var.ansible_extra_roles) > 0 && var.custom_image_name == "" ? file("ERROR: custom_image_name MUST be provided when ansible_extra_roles is non-empty") : null
+
+  has_slurm        = var.orchestrator == "slurm" && !contains(var.ansible_exclude_roles, "slurm")
+  has_nvidia_stack = var.hw_type == "gpu" && !contains(var.ansible_exclude_roles, "nvidia_stack")
+  has_lustre       = !contains(var.ansible_exclude_roles, "lustre")
+
+
   ansible_vars = {
-    image_os                = var.image_os
-    cpu_arch                = var.cpu_arch
-    orchestrator            = var.orchestrator
-    hw_type                 = var.hw_type
-    release_track           = var.release_track
-    fabric_manager_version  = var.fabric_manager_version
-    cuda_version            = var.cuda_version
-    nccl_gib_version        = var.nccl_gib_version
-    nccl_version            = var.nccl_version
-    install_slurm           = var.install_slurm
-    install_nvidia_stack    = var.install_nvidia_stack
-    source_image_family     = var.source_image_family
-    source_image_project_id = var.source_image_project_id
-    slurm_version           = var.slurm_version
-    python_version          = var.python_version
-    install_lustre          = var.install_lustre
+    image_os                 = var.image_os
+    cpu_arch                 = var.cpu_arch
+    orchestrator             = var.orchestrator
+    hw_type                  = var.hw_type
+    release_track            = var.release_track
+    fabric_manager_version   = var.fabric_manager_version
+    nvidia_driver_package_version = var.nvidia_driver_package_version
+    fabricmanager_deb       = var.fabricmanager_deb
+    cuda_version             = var.cuda_version
+    nccl_gib_version         = var.nccl_gib_version
+    nccl_version             = var.nccl_version
+    source_image_family      = var.source_image_family
+    source_image_project_id  = var.source_image_project_id
+    slurm_version            = var.slurm_version
+    build_slurm_from_git_ref = var.build_slurm_from_git_ref
+    python_version           = var.python_version
+
+    # Computed boolean feature flags derived from effective roles list for Ansible compatibility
+    install_slurm            = local.has_slurm
+    install_nvidia_stack     = local.has_nvidia_stack
+    install_lustre           = local.has_lustre
+    install_dcgm             = var.install_dcgm
+
+    # List-driven pass-through parameters
+    extra_roles              = var.ansible_extra_roles
+    exclude_roles            = var.ansible_exclude_roles
   }
+
+
   image_family_parts = compact([
     "aci",
     var.hw_type,
+    var.tpu_version,
     replace(replace(var.image_os, "ubuntu", "u"), "rocky", "rocky-linux-"),
-    var.install_slurm ? "slurm-${join("", slice(split(".", var.slurm_version), 0, 2))}" : null,
-    var.install_nvidia_stack ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
-    var.install_nvidia_stack ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
+    local.has_slurm ? "slurm-${join("", slice(split(".", var.slurm_version), 0, 2))}" : null,
+    local.has_nvidia_stack ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
+    local.has_nvidia_stack ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
     var.cpu_arch == "x86_64" ? "amd64" : (var.cpu_arch == "arm64" ? "arm64" : replace(var.cpu_arch, "_", "-")),
     var.release_track == "nightly" ? var.release_track : null
   ])
-  image_family_name  = join("-", local.image_family_parts)
+  image_family_name = join("-", local.image_family_parts)
   image_name_parts = compact([
     "aci",
     var.hw_type,
+    var.tpu_version,
     replace(replace(var.image_os, "ubuntu", "u"), "rocky", "rocky-linux-"),
-    var.install_slurm ? "slurm-${join("", slice(split(".", var.slurm_version), 0, 2))}" : null,
-    var.install_nvidia_stack ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
-    var.install_nvidia_stack ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
+    local.has_slurm ? "slurm-${join("", slice(split(".", var.slurm_version), 0, 2))}" : null,
+    local.has_nvidia_stack ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
+    local.has_nvidia_stack ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
     var.cpu_arch == "x86_64" ? "amd64" : (var.cpu_arch == "arm64" ? "arm64" : replace(var.cpu_arch, "_", "-")),
   ])
-  image_name_val = join("-", local.image_name_parts)
+  image_name_val = local._validate_image_name == null ? (var.custom_image_name != "" ? var.custom_image_name : join("-", local.image_name_parts)) : null
 }
 
 source "googlecompute" "image" {
@@ -109,13 +132,12 @@ source "googlecompute" "image" {
 
   # --- Startup Script & Metadata ---
   metadata = {
-    ansible-bundle-base64 = var.ansible_bundle_base64
-    block-project-ssh-keys = "TRUE"
-    extra-vars-content    = jsonencode(local.ansible_vars)
+    ansible-bundle-base64   = var.ansible_bundle_base64
+    block-project-ssh-keys  = "TRUE"
+    extra-vars-content      = jsonencode(local.ansible_vars)
     enable-guest-attributes = "TRUE"
-    enable-osconfig = "FALSE"
-    startup-script-status = "pending"
-
+    enable-osconfig         = "FALSE"
+    startup-script-status   = "pending"
     startup-script = file("startup-script.sh")
   }
 }

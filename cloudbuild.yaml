@@ -17,15 +17,14 @@
 # gcloud builds submit --config cloudbuild.yaml --project YOUR_PROJECT_ID
 #
 # You can override substitutions via the command line, for example:
-# gcloud builds submit --config cloudbuild.yaml --project YOUR_PROJECT_ID --substitutions=_CONFIG_FILE="rocky-9-cpu.pkrvars.hcl",_OVERRIDES="hw_type=cpu;disk_size=20"
+# gcloud builds submit --config cloudbuild.yaml --project YOUR_PROJECT_ID --substitutions=_CONFIG_FILE="rocky-9-cpu.pkrvars.hcl",_ZONE="us-central1-b"
 
 substitutions:
   _CONFIG_FILE: "ubuntu-2204-slurm-gpu-dev.pkrvars.hcl"
-  _BUILD_NUMBER: "1"
+  _BUILD_NUMBER: "3"
   _RELEASE_TRACK: "dev"
   _ZONE: "us-central1-a"
   _OVERRIDES: ""
-  _IMAGE_NAME_GCS_BUCKET: ""
 
 steps:
 - name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli:slim'
@@ -35,10 +34,9 @@ steps:
   args:
     - '-c'
     - |
-      set -e
+      set -e -o pipefail
 
       # --- Install Dependencies ---
-      # We only need Packer now. Ansible runs inside the VM, not here.
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
       apt-get install -y curl unzip jq
@@ -53,112 +51,45 @@ steps:
 
       packer --version
 
-      # --- Run Packer ---
-      # We pass BUILD_ID so Packer can name the instance uniquely
+      # --- Prepare Ansible Bundle ---
       echo "Bundling and encoding Ansible directory..."
       tar -czf ansible_bundle.tar.gz -C ansible .
       ANSIBLE_BUNDLE_B64=$(base64 -w 0 ansible_bundle.tar.gz)
       rm ansible_bundle.tar.gz
 
+      # --- Prepare Packer Arguments ---
       declare -a PACKER_ARGS
-        PACKER_ARGS=(-var-file="packer/builds/${_CONFIG_FILE}")
-        PACKER_ARGS+=(-var="project_id=${PROJECT_ID}")
-        PACKER_ARGS+=(-var="zone=${_ZONE}")
-        PACKER_ARGS+=(-var="build_id=${BUILD_ID}")
-        PACKER_ARGS+=(-var="release_track=${_RELEASE_TRACK}")
-        PACKER_ARGS+=(-var="ansible_bundle_base64=$$ANSIBLE_BUNDLE_B64")
+      PACKER_ARGS=(-var-file="packer/builds/${_CONFIG_FILE}")
+      PACKER_ARGS+=(-var="project_id=${PROJECT_ID}")
+      PACKER_ARGS+=(-var="build_id=${BUILD_ID}")
+      PACKER_ARGS+=(-var="release_track=${_RELEASE_TRACK}")
+      PACKER_ARGS+=(-var="ansible_bundle_base64=$$ANSIBLE_BUNDLE_B64")
+      PACKER_ARGS+=(-var="zone=${_ZONE}")
+      PACKER_ARGS+=(-var="build_number=${_BUILD_NUMBER}")
 
+      # Process any overrides passed from the command line
       if [[ -n "${_OVERRIDES}" ]]; then
         echo "Processing overrides from _OVERRIDES: ${_OVERRIDES}"
         IFS=';' read -ra OVERRIDE_PAIRS <<< "${_OVERRIDES}"
 
-        for pair in "${OVERRIDE_PAIRS[@]}"; do
-          if [[ -n "${pair}" ]]; then
-            PACKER_ARGS+=(-var="${pair}")
+        for pair in "$${OVERRIDE_PAIRS[@]}"; do
+          if [[ -n "$${pair}" ]]; then
+            PACKER_ARGS+=(-var="$${pair}")
           fi
         done
       fi
 
-      echo "Starting Packer build..."
+      PACKER_ARGS+=(packer/)
+
+      # --- Build the Image ---
+      echo "Starting Packer init..."
       packer init packer/
 
-      initial_build_number=${_BUILD_NUMBER}
-      if [[ -z "$$initial_build_number" ]]; then
-         initial_build_number=1
-      fi
-
-      current_args=("${PACKER_ARGS[@]}")
-      current_args+=(-var="build_number=$$initial_build_number")
-      current_args+=(packer/)
+      echo "Starting Packer build in zone: ${_ZONE} with build_number: ${_BUILD_NUMBER}..."
+      echo "Arguments: $${PACKER_ARGS[@]}"
       
-      echo "Starting Packer build with given build_number=$$initial_build_number..."
-      echo "Arguments: $${current_args[@]}"
+      packer build "$${PACKER_ARGS[@]}"
       
-      if packer build "$${current_args[@]}"; then
-        echo "Packer build succeeded on first try."
-      else
-        if [ "${_RELEASE_TRACK}" != "nightly" ]; then
-          echo "Initial build failed and release track is not nightly. Failing immediately."
-          exit 1
-        fi
-
-        echo "Initial build failed. Engaging retry mechanism for nightly build..."
-        current_build_number=$$initial_build_number
-
-        echo "Determining image family for nightly build..."
-        IMAGE_FAMILY=$(echo 'local.image_family_name' | packer console "$${PACKER_ARGS[@]}" packer/ | tr -d '\r')
-        echo "Image family is: $$IMAGE_FAMILY"
-        
-        ACTIVE_IMAGE=$(gcloud compute images describe-from-family "$$IMAGE_FAMILY" --project="${PROJECT_ID}" --format="value(name)" 2>/dev/null || true)
-        
-        if [ -n "$$ACTIVE_IMAGE" ]; then
-          echo "Found active image: $$ACTIVE_IMAGE"
-          LAST_PART="$${ACTIVE_IMAGE##*-}"
-          if [[ "$$LAST_PART" =~ ^[0-9]+$$ ]]; then
-            if [ "$$initial_build_number" -gt "$$LAST_PART" ]; then
-               current_build_number=$$((initial_build_number + 1))
-            else
-               current_build_number=$$((LAST_PART + 1))
-            fi
-          else
-            current_build_number=$$((initial_build_number + 1))
-          fi
-        else
-          echo "No active image found for family $$IMAGE_FAMILY."
-          current_build_number=$$((initial_build_number + 1))
-        fi
-
-        retry_args=("${PACKER_ARGS[@]}")
-        retry_args+=(-var="build_number=$$current_build_number")
-        retry_args+=(packer/)
-        
-        echo "Retrying once with build_number=$$current_build_number..."
-        
-        if packer build "$${retry_args[@]}"; then
-          echo "Packer build succeeded on retry."
-        else
-          echo "Packer build failed on retry with build_number=$$current_build_number."
-          exit 1
-        fi
-      fi
-
-      # --- Deprecate Image for Testing ---
-      echo "Extracting image name from packer-manifest.json..."
-      if [ -f packer-manifest.json ]; then
-        IMAGE_NAME=$(jq -r '.builds[0].artifact_id' packer-manifest.json | cut -d: -f2)
-        echo "Deprecating image $$IMAGE_NAME to hide it during testing..."
-        gcloud compute images deprecate "$$IMAGE_NAME" --state=DEPRECATED --project=${PROJECT_ID}
-
-        # --- Upload Image Name to GCS for Test Stage ---
-        if [ "${_RELEASE_TRACK}" = "nightly" ] && [ -n "${_IMAGE_NAME_GCS_BUCKET}" ]; then
-          echo "$$IMAGE_NAME" > image_name.txt
-          echo "Uploading image name to gs://${_IMAGE_NAME_GCS_BUCKET}/image_name.txt..."
-          gsutil cp image_name.txt "gs://${_IMAGE_NAME_GCS_BUCKET}/image_name.txt"
-        fi
-      else
-        echo "Warning: packer-manifest.json not found. Cannot deprecate image."
-      fi
-
-timeout: '10800s'
+timeout: '12000s'
 options:
   logging: CLOUD_LOGGING_ONLY

@@ -1,0 +1,245 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+- name: Check if Mellanox OFED is installed
+  ansible.builtin.command: ofed_info -s
+  register: ofed_info_check
+  failed_when: false
+  changed_when: false
+  become: true
+
+- name: Configure RDMA for Rocky Linux 9
+  block:
+    - name: Install CIQ RDMA packages for Rocky Linux 9
+      ansible.builtin.dnf:
+        name: "{{ ciq_rdma_packages }}"
+        disablerepo: "baseos,appstream"
+        enablerepo: "ciq-sigcloud-next"
+        disable_plugin: "*"
+        state: present
+
+    - name: Install build dependencies for libfabric and perftest
+      ansible.builtin.dnf:
+        name: "{{ rdma_build_dependencies }}"
+        state: present
+
+    - name: Clone libfabric repository
+      ansible.builtin.git:
+        repo: "https://github.com/ofiwg/libfabric.git"
+        dest: /tmp/libfabric
+        version: "v{{ rdma_libfabric_version }}"
+        depth: 1
+        force: true
+
+    - name: Build and stage libfabric from source against installed verbs
+      ansible.builtin.shell: |
+        ./autogen.sh
+        ./configure --prefix=/usr --libdir=/usr/lib64
+        make -j$(nproc)
+        rm -rf /tmp/libfabric-stage /tmp/libfabric-pkg /tmp/rpms
+        make install DESTDIR=/tmp/libfabric-stage
+      args:
+        chdir: /tmp/libfabric
+        executable: /bin/bash
+
+    - name: Generate RPM spec for libfabric
+      ansible.builtin.copy:
+        dest: /tmp/libfabric.spec
+        mode: "0644"
+        content: |
+          Name: libfabric
+          Version: {{ rdma_libfabric_version }}
+          Release: 1.el9
+          Epoch: 1
+          Summary: Open Fabrics Interfaces (OFI) Library built against CIQ RDMA
+          License: BSD or GPLv2
+          AutoReqProv: yes
+          Provides: libfabric = 1:{{ rdma_libfabric_version }}-1.el9
+          Provides: libfabric-devel = 1:{{ rdma_libfabric_version }}-1.el9
+          %description
+          Custom Libfabric built from source with IDPF/iRDMA verbs support.
+          %install
+          cp -a /tmp/libfabric-stage/* %{buildroot}/
+          %files
+          /usr/bin/*
+          /usr/lib64/*
+          /usr/include/*
+          /usr/share/man/*/*
+
+    - name: Build libfabric RPM package
+      ansible.builtin.command: >
+        rpmbuild -bb --buildroot /tmp/libfabric-pkg
+        --define "_rpmdir /tmp/rpms"
+        --define "_build_id_links none"
+        /tmp/libfabric.spec
+
+    - name: Install custom libfabric RPM via DNF
+      ansible.builtin.dnf:
+        name: "/tmp/rpms/{{ ansible_facts['architecture'] }}/libfabric-{{ rdma_libfabric_version }}-1.el9.{{ ansible_facts['architecture'] }}.rpm"
+        state: present
+        disable_gpg_check: true
+
+    - name: Clean up libfabric build artifacts
+      ansible.builtin.file:
+        path: "{{ cleanup_path }}"
+        state: absent
+      loop:
+        - /tmp/libfabric
+        - /tmp/libfabric-stage
+        - /tmp/libfabric-pkg
+        - /tmp/libfabric.spec
+      loop_control:
+        loop_var: cleanup_path
+
+    - name: Clone perftest repository
+      ansible.builtin.git:
+        repo: "https://github.com/linux-rdma/perftest.git"
+        dest: /tmp/perftest
+        depth: 1
+        force: true
+
+    - name: Detect upstream perftest version from cloned repository
+      ansible.builtin.shell: |
+        VER=$(awk '/^Version:/ {print $2; exit}' /tmp/perftest/perftest.spec 2>/dev/null || true)
+        if [ -z "$VER" ]; then
+          VER=$(awk -F'[][]' '/^AC_INIT/ {print $4; exit}' /tmp/perftest/configure.ac 2>/dev/null || echo "24.10.0")
+        fi
+        echo "$VER"
+      args:
+        executable: /bin/bash
+      register: perftest_rpm_version
+      changed_when: false
+
+    - name: Build and stage perftest from source against installed verbs
+      ansible.builtin.shell: |
+        ./autogen.sh
+        CONFIGURE_FLAGS=""
+        if [ -f /usr/local/cuda/include/cuda.h ]; then
+          CONFIGURE_FLAGS="CUDA_H_PATH=/usr/local/cuda/include/cuda.h"
+        fi
+        ./configure --prefix=/usr $CONFIGURE_FLAGS
+        make -j$(nproc)
+        rm -rf /tmp/perftest-stage /tmp/perftest-pkg /tmp/rpms
+        make install DESTDIR=/tmp/perftest-stage
+      args:
+        chdir: /tmp/perftest
+        executable: /bin/bash
+
+    - name: Generate RPM spec for perftest
+      ansible.builtin.copy:
+        dest: /tmp/perftest.spec
+        mode: "0644"
+        content: |
+          Name: perftest
+          Version: {{ perftest_rpm_version.stdout | trim }}
+          Release: 1.el9
+          Epoch: 1
+          Summary: RDMA Performance Testing Tools built against CIQ RDMA
+          License: BSD or GPLv2
+          AutoReqProv: yes
+          Provides: perftest = 1:{{ perftest_rpm_version.stdout | trim }}-1.el9
+          %description
+          Custom Perftest built from source with IDPF/iRDMA verbs support.
+          %install
+          cp -a /tmp/perftest-stage/* %{buildroot}/
+          %files
+          /usr/bin/*
+          /usr/share/*
+
+    - name: Build perftest RPM package
+      ansible.builtin.command: >
+        rpmbuild -bb --buildroot /tmp/perftest-pkg
+        --define "_rpmdir /tmp/rpms"
+        --define "_build_id_links none"
+        /tmp/perftest.spec
+
+    - name: Install custom perftest RPM via DNF
+      ansible.builtin.dnf:
+        name: "/tmp/rpms/{{ ansible_facts['architecture'] }}/perftest-{{ perftest_rpm_version.stdout | trim }}-1.el9.{{ ansible_facts['architecture'] }}.rpm"
+        state: present
+        disable_gpg_check: true
+
+    - name: Clean up perftest and RPM build artifacts
+      ansible.builtin.file:
+        path: "{{ cleanup_path }}"
+        state: absent
+      loop:
+        - /tmp/perftest
+        - /tmp/perftest-stage
+        - /tmp/perftest-pkg
+        - /tmp/perftest.spec
+        - /tmp/rpms
+      loop_control:
+        loop_var: cleanup_path
+
+    - name: Install DNF versionlock plugin
+      ansible.builtin.dnf:
+        name: python3-dnf-plugin-versionlock
+        state: present
+
+    - name: Lock RDMA stack, libfabric, and perftest package versions in DNF
+      ansible.builtin.command: >
+        dnf versionlock add {{ rdma_versionlock_packages | join(' ') }}
+      register: versionlock_result
+      changed_when: "'Adding versionlock on:' in versionlock_result.stdout"
+
+    - name: Remove dracut RDMA omission configs if present
+      ansible.builtin.file:
+        path: /etc/dracut.conf.d/omit-rdma.conf
+        state: absent
+
+    - name: Configure automatic kernel module loading for RDMA
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/rdma.conf
+        content: |
+          ib_core
+          rdma_ucm
+          irdma
+        mode: "0644"
+
+    - name: Force dracut initramfs regeneration to include RDMA drivers
+      ansible.builtin.command: dracut --regenerate-all --force
+  when:
+    - ansible_facts['distribution'] == 'Rocky'
+    - ansible_facts['distribution_major_version'] == '9'
+    - ofed_info_check.rc != 0
+  become: true
+
+- name: Install RDMA packages for Rocky Linux (non-9)
+  ansible.builtin.package:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - rdma-core
+    - libibverbs-utils
+    - librdmacm-utils
+    - rdma-core-devel
+    - infiniband-diags
+  when:
+    - ansible_facts['distribution'] == 'Rocky'
+    - ansible_facts['distribution_major_version'] != '9'
+    - ofed_info_check.rc != 0
+  become: true
+
+- name: Install perftest for Rocky Linux (non-9)
+  ansible.builtin.dnf:
+    name: perftest
+    state: present
+    disable_excludes: all
+  when:
+    - ansible_facts['distribution'] == 'Rocky'
+    - ansible_facts['distribution_major_version'] != '9'
+    - ofed_info_check.rc != 0
+  become: true

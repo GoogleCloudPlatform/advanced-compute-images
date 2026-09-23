@@ -18,12 +18,12 @@
       ansible.builtin.include_vars: "{{ item }}"
       with_first_found:
         - files:
-            - '{{ ansible_distribution|lower }}-{{ ansible_distribution_version }}.yml'
-            - '{{ ansible_distribution|lower }}-{{ ansible_distribution_major_version }}.yml'
-            - '{{ ansible_distribution|lower }}.yml'
-            - '{{ ansible_os_family|lower }}-{{ ansible_distribution_version }}.yml'
-            - '{{ ansible_os_family|lower }}-{{ ansible_distribution_major_version }}.yml'
-            - '{{ ansible_os_family|lower }}.yml'
+            - "{{ ansible_facts['distribution']|lower }}-{{ ansible_facts['distribution_version'] }}.yml"
+            - "{{ ansible_facts['distribution']|lower }}-{{ ansible_facts['distribution_major_version'] }}.yml"
+            - "{{ ansible_facts['distribution']|lower }}.yml"
+            - "{{ ansible_facts['os_family']|lower }}-{{ ansible_facts['distribution_version'] }}.yml"
+            - "{{ ansible_facts['os_family']|lower }}-{{ ansible_facts['distribution_major_version'] }}.yml"
+            - "{{ ansible_facts['os_family']|lower }}.yml"
           paths:
             - "{{ playbook_dir }}/../../ansible/roles/common/vars"
       ignore_errors: true
@@ -70,14 +70,14 @@
           - "firstrun_stat.stat.exists"
           - "firstrun_stat.stat.mode == '0660'"
         fail_msg: "Firstrun flag verification failed on Debian/Ubuntu (exists or mode incorrect)."
-      when: ansible_os_family == "Debian"
+      when: ansible_facts['os_family'] == "Debian"
 
     - name: Assert firstrun flag does not exist on RedHat/Rocky (since it should be consumed on first boot)
       ansible.builtin.assert:
         that:
           - "not firstrun_stat.stat.exists"
         fail_msg: "Firstrun flag still exists on RedHat/Rocky VM, indicating first-boot tuning failed to execute or clean up."
-      when: ansible_os_family == "RedHat"
+      when: ansible_facts['os_family'] == "RedHat"
 
   rescue:
     - name: Use the failure_recorder role to log this failure

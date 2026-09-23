@@ -16,27 +16,52 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 echo "--- STARTING SBOM GENERATION ---"
-# Install Syft if not present
-if curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.33.0; then
-    echo "Syft installed successfully."
-else
-    echo "Syft installation failed."
-    exit 1
-fi
 
-# Ensure jq is installed early for safe JSON generation
-if ! command -v jq &> /dev/null; then
-    echo "jq not found. Installing..."
+# Ensure required dependencies (jq, curl, tar, coreutils) are installed
+echo "Checking required dependencies..."
+if ! command -v jq &> /dev/null || ! command -v curl &> /dev/null || ! command -v tar &> /dev/null || ! command -v sha256sum &> /dev/null; then
+    echo "Installing missing dependencies..."
     if command -v apt-get &> /dev/null; then
-        apt-get update && apt-get install -y jq
+        apt-get update && apt-get install -y jq curl tar coreutils
     elif command -v dnf &> /dev/null; then
-        dnf install -y jq
+        dnf install -y jq curl tar coreutils
     elif command -v yum &> /dev/null; then
-        yum install -y jq
+        yum install -y jq curl tar coreutils
     else
-        echo "Package manager not found. Cannot install jq."
+        echo "Package manager not found. Cannot install dependencies."
         exit 1
     fi
+fi
+
+# Install Syft if not present, enforcing SHA-256 verification
+if ! command -v syft &> /dev/null; then
+    echo "Installing Syft v1.33.0 with SHA-256 checksum verification..."
+    ARCH=$(uname -m)
+    SYFT_VERSION="v1.33.0"
+    if [[ "${ARCH}" == "x86_64" || "${ARCH}" == "amd64" ]]; then
+        SYFT_ARCH="linux_amd64"
+        SYFT_SHA256="adc1b944a827ed3432bcd9f1dbdbc8fa3c0dca7d3d449e7084c90248c2c6cb50"
+    elif [[ "${ARCH}" == "aarch64" || "${ARCH}" == "arm64" ]]; then
+        SYFT_ARCH="linux_arm64"
+        SYFT_SHA256="6688be30048149df88e5959a756dbab086022a04d0f7497790cd298a9669f49d"
+    else
+        echo "Unsupported architecture for Syft: ${ARCH}"
+        exit 1
+    fi
+
+    SYFT_TARBALL="syft_${SYFT_VERSION#v}_${SYFT_ARCH}.tar.gz"
+    SYFT_URL="https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/${SYFT_TARBALL}"
+
+    echo "Downloading Syft ${SYFT_VERSION} for ${SYFT_ARCH}..."
+    curl -sSfL -o "/tmp/${SYFT_TARBALL}" "${SYFT_URL}"
+    echo "Verifying SHA-256 checksum..."
+    echo "${SYFT_SHA256}  /tmp/${SYFT_TARBALL}" | sha256sum -c -
+    tar -xzf "/tmp/${SYFT_TARBALL}" -C /usr/local/bin syft
+    chmod +x /usr/local/bin/syft
+    rm -f "/tmp/${SYFT_TARBALL}"
+    echo "Syft ${SYFT_VERSION} installed successfully."
+else
+    echo "Syft is already installed at $(command -v syft)."
 fi
 
 # --- START CUDA SBOM AMENDMENT ---

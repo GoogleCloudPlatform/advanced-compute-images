@@ -29,13 +29,13 @@
       name: git
       state: present
       update_cache: yes
-    when: ansible_os_family == "Debian"
+    when: ansible_facts['os_family'] == "Debian"
 
   - name: Install build-essential if make is missing
     ansible.builtin.apt:
       name: build-essential
       state: present
-    when: ansible_os_family == "Debian"
+    when: ansible_facts['os_family'] == "Debian"
 
   - name: Install OpenMPI if missing
     ansible.builtin.apt:
@@ -43,7 +43,7 @@
         - openmpi-bin
         - libopenmpi-dev
       state: present
-    when: ansible_os_family == "Debian"
+    when: ansible_facts['os_family'] == "Debian"
 
   - name: Clone nccl-tests
     ansible.builtin.git:
@@ -82,7 +82,7 @@
       NCCL_DEBUG: INFO
       NCCL_IB_DISABLE: "1"
       NCCL_SOCKET_IFNAME: "{{ default_iface.stdout }}"
-      LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:{{ ansible_env.LD_LIBRARY_PATH | default('') }}"
+      LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:{{ ansible_facts['env']['LD_LIBRARY_PATH'] | default('') }}"
     when: num_gpus | int == 1
     register: nccl_single_output
 
@@ -99,7 +99,7 @@
       NCCL_DEBUG: INFO
       NCCL_IB_DISABLE: "1"
       NCCL_SOCKET_IFNAME: "{{ default_iface.stdout }}"
-      LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:{{ ansible_env.LD_LIBRARY_PATH | default('') }}"
+      LD_LIBRARY_PATH: "/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:{{ ansible_facts['env']['LD_LIBRARY_PATH'] | default('') }}"
     when: num_gpus | int >= 2
     register: nccl_multi_output
 

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 ---
-hpc_user: "{{ 'ubuntu' if ansible_os_family == 'Debian' else 'rocky' }}"
+hpc_user: "{{ 'ubuntu' if ansible_facts['os_family'] == 'Debian' else 'rocky' }}"
 spack_root: /opt/apps/spack
 # Where you want your symlinks (views) to live
 apps_path: /apps

@@ -28,7 +28,7 @@
   tasks:
     - name: Import Tests for Common Roles
       ansible.builtin.include_role:
-       name: "{{item}}"
+        name: "{{ item }}"
       loop:
         - common
         - docker
@@ -39,10 +39,16 @@
         - os_configs
         - spack
         - manifest
+        - guest_os_validation
 
     - name: Import Test for Cloud Monitoring
       ansible.builtin.include_role:
         name: cloud_monitoring
+      when: not install_slurm
+
+    - name: Import Test for NFS
+      ansible.builtin.include_role:
+        name: nfs
       when: not install_slurm
 
     - name: Import Test for nvidia_stack
@@ -70,13 +76,15 @@
         name: nccl_gib
       when: hw_type == "gpu"
 
+
     - name: Import Tests for Rocky Specific Packages
       ansible.builtin.include_role:
-       name: "{{item}}"
+        name: "{{ item }}"
       loop:
         - google-hpc-compute
         - selinux
-      when: ansible_os_family == "RedHat"
+        - hpc_tunings
+      when: ansible_facts['os_family'] == "RedHat"
 
     - name: Install python3-venv
       ansible.builtin.apt:

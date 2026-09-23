@@ -1,0 +1,104 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+# Tasks for installing Google HPC specifics, which are to be
+# executed after the first reboot.
+
+- name: Configure Console (After Reboot)
+  block:
+    - name: Enable ttyS1 console
+      ansible.builtin.systemd:
+        name: serial-getty@ttyS1.service
+        enabled: true
+    - name: Disable ttyS0 console
+      ansible.builtin.systemd:
+        name: serial-getty@ttyS0.service
+        enabled: false
+
+# Local Build Flow: Build RPM locally and install
+- name: Install Google HPC RPMs (Local Build Flow)
+  block:
+    - name: Include RPM build tasks
+      include_tasks: os/build_rpm.yml
+
+    - name: Install locally built RPM
+      ansible.builtin.dnf:
+        name: "{{ local_built_rpm_path }}"
+        state: present
+        disable_gpg_check: true
+
+    - name: Clean up rpmbuild directory
+      ansible.builtin.file:
+        path: "{{ rpmbuild_dir }}"
+        state: absent
+
+- name: Run Google MPI Tuning (Post-Install)
+  ansible.builtin.command:
+    cmd: /usr/bin/google_mpi_tuning --nofirewalld --noselinux
+  register: tuning_result
+  changed_when: "'No task(s) selected' not in tuning_result.stderr"
+
+- name: Cleanup Image
+  block:
+    - name: Reset machine-id
+      ansible.builtin.copy:
+        dest: /etc/machine-id
+        content: "uninitialized\n"
+
+    - name: Remove Logs
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/log/dmesg
+        - /var/log/dmesg.old
+        - /var/log/tuned
+        - /var/cache/yum
+        - /root/.bash_history
+
+    - name: Truncate Logs
+      ansible.builtin.shell: truncate -s 0 {{ item }}
+      loop:
+        - /var/log/boot.log
+        - /var/log/audit/audit.log
+        - /var/log/lastlog
+        - /var/log/maillog
+        - /var/log/firewalld
+        - /var/log/secure
+        - /var/log/wtmp
+        - /var/log/messages
+      ignore_errors: true
+
+    - name: Touch firstrun flag
+      ansible.builtin.file:
+        path: /.google_hpc_firstrun
+        state: touch
+
+    - name: Yum Autoremove
+      ansible.builtin.dnf:
+        autoremove: true
+
+    - name: Yum Clean All
+      ansible.builtin.command: yum clean all
+
+    - name: Clear Journal
+      ansible.builtin.command: journalctl --flush --vacuum-time=1s
+
+    - name: Shred SSH Host Keys
+      ansible.builtin.shell: shred --remove /etc/ssh/ssh_host_*
+      ignore_errors: true
+
+    - name: Clear History
+      ansible.builtin.shell: "> /root/.bash_history"

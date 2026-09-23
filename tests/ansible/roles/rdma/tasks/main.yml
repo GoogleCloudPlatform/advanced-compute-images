@@ -18,7 +18,7 @@
     ansible.builtin.shell: "dpkg -s rdma-core"
     register: rdma_core_check
     failed_when: rdma_core_check.rc != 0
-    when: ansible_distribution == "Ubuntu"
+    when: ansible_facts['distribution'] == "Ubuntu"
     become: true
     changed_when: false
 
@@ -26,7 +26,7 @@
     ansible.builtin.shell: "dpkg -s ibverbs-utils"
     register: ibverbs_utils_check
     failed_when: ibverbs_utils_check.rc != 0
-    when: ansible_distribution == "Ubuntu"
+    when: ansible_facts['distribution'] == "Ubuntu"
     become: true
     changed_when: false
 
@@ -34,31 +34,31 @@
     ansible.builtin.shell: "dpkg -s rdmacm-utils"
     register: rdmacm_utils_check
     failed_when: rdmacm_utils_check.rc != 0
-    when: ansible_distribution == "Ubuntu"
+    when: ansible_facts['distribution'] == "Ubuntu"
     become: true
     changed_when: false
 
   - name: Check if rdma-core is installed on Rocky Linux
-    ansible.builtin.command: "dnf list installed rdma-core"
+    ansible.builtin.command: "rpm -q rdma-core"
     register: rdma_core_check_rocky
     failed_when: rdma_core_check_rocky.rc != 0
-    when: ansible_distribution == "Rocky"
+    when: ansible_facts['distribution'] == "Rocky"
     become: true
     changed_when: false
 
   - name: Check if libibverbs-utils is installed on Rocky Linux
-    ansible.builtin.command: "dnf list installed libibverbs-utils"
+    ansible.builtin.command: "rpm -q libibverbs-utils"
     register: libibverbs_utils_check_rocky
     failed_when: libibverbs_utils_check_rocky.rc != 0
-    when: ansible_distribution == "Rocky"
+    when: ansible_facts['distribution'] == "Rocky"
     become: true
     changed_when: false
 
-  - name: Run dnf list installed for librdmacm-utils on Rocky Linux
-    ansible.builtin.command: "dnf list installed librdmacm-utils"
+  - name: Run rpm -q for librdmacm-utils on Rocky Linux
+    ansible.builtin.command: "rpm -q librdmacm-utils"
     register: librdmacm_utils_check_rocky
     changed_when: false
-    when: ansible_distribution == "Rocky"
+    when: ansible_facts['distribution'] == "Rocky"
     become: true
     ignore_errors: true
 
@@ -66,11 +66,84 @@
     ansible.builtin.assert:
       that:
         - "'librdmacm-utils' in librdmacm_utils_check_rocky.stdout"
-      msg: "dnf list installed did not show 'librdmacm-utils' as installed."
+      msg: "rpm -q did not show 'librdmacm-utils' as installed."
     when:
-      - ansible_distribution == "Rocky"
+      - ansible_facts['distribution'] == "Rocky"
       - librdmacm_utils_check_rocky is defined
       - librdmacm_utils_check_rocky.stdout is defined
+
+  - name: Check if CIQ RDMA packages are installed on Rocky Linux 9
+    ansible.builtin.shell: "rpm -q kmod-idpf-irdma rdma-core libibverbs librdmacm libibumad infiniband-diags"
+    register: ciq_rdma_check_rocky9
+    failed_when: ciq_rdma_check_rocky9.rc != 0
+    when:
+      - ansible_facts['distribution'] == "Rocky"
+      - ansible_facts['distribution_major_version'] == "9"
+    become: true
+    changed_when: false
+
+  - name: Check Libfabric version and linkage on Rocky Linux 9
+    ansible.builtin.shell: "fi_info --version"
+    register: fi_info_check_rocky9
+    failed_when: fi_info_check_rocky9.rc != 0
+    when:
+      - ansible_facts['distribution'] == "Rocky"
+      - ansible_facts['distribution_major_version'] == "9"
+    become: true
+    changed_when: false
+
+  - name: Check perftest binaries exist on Rocky Linux 9
+    ansible.builtin.shell: "which ib_write_bw ib_read_bw ibv_devinfo"
+    register: perftest_check_rocky9
+    failed_when: perftest_check_rocky9.rc != 0
+    when:
+      - ansible_facts['distribution'] == "Rocky"
+      - ansible_facts['distribution_major_version'] == "9"
+    become: true
+    changed_when: false
+
+  - name: Verify omit-rdma.conf is removed on Rocky Linux 9
+    ansible.builtin.shell: "! test -f /etc/dracut.conf.d/omit-rdma.conf"
+    register: omit_rdma_check_rocky9
+    failed_when: omit_rdma_check_rocky9.rc != 0
+    when:
+      - ansible_facts['distribution'] == "Rocky"
+      - ansible_facts['distribution_major_version'] == "9"
+    become: true
+    changed_when: false
+
+  - name: Verify rdma.conf module loading configuration on Rocky Linux 9
+    ansible.builtin.shell: "grep -q 'irdma' /etc/modules-load.d/rdma.conf"
+    register: modules_load_check_rocky9
+    failed_when: modules_load_check_rocky9.rc != 0
+    when:
+      - ansible_facts['distribution'] == "Rocky"
+      - ansible_facts['distribution_major_version'] == "9"
+    become: true
+    changed_when: false
+
+  - name: Verify libfabric and perftest are registered in the RPM database on Rocky Linux 9
+    ansible.builtin.command: "rpm -q libfabric perftest"
+    register: rpm_custom_pkgs_check_rocky9
+    failed_when: rpm_custom_pkgs_check_rocky9.rc != 0
+    when:
+      - ansible_facts['distribution'] == "Rocky"
+      - ansible_facts['distribution_major_version'] == "9"
+    become: true
+    changed_when: false
+
+  - name: Verify RDMA packages are locked in DNF versionlock on Rocky Linux 9
+    ansible.builtin.command: "dnf versionlock list"
+    register: versionlock_list_check_rocky9
+    failed_when: >
+      versionlock_list_check_rocky9.rc != 0 or
+      'kmod-idpf-irdma' not in versionlock_list_check_rocky9.stdout or
+      'libfabric' not in versionlock_list_check_rocky9.stdout
+    when:
+      - ansible_facts['distribution'] == "Rocky"
+      - ansible_facts['distribution_major_version'] == "9"
+    become: true
+    changed_when: false
 
   rescue:
   - name: Use the failure_recorder role to log this failure

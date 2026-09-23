@@ -1,0 +1,189 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# helm-gcp-releases repo is no longer maintained and is missing the Release file.
+# Remove broken helm-gcp-releases repository that causes apt update to fail.
+# Remove conflicting dkms package to allow installation of kernel-specific lustre client modules in the slurm-gcp playbook.
+# Proactively add Official MariaDB 10.11 LTS Repository to pull patched database builds
+
+---
+- name: Execute conditionally gated tasks natively
+  block:
+    - name: Clone slurm-gcp repository
+      ansible.builtin.git:
+        repo: https://github.com/GoogleCloudPlatform/slurm-gcp
+        dest: /opt/slurm-gcp-repo
+        version: "{{ build_slurm_from_git_ref }}"
+        force: true
+
+    - name: Patch slurm-gcp ansible/playbook.yml to fix version_compare syntax
+      ansible.builtin.replace:
+        path: /opt/slurm-gcp-repo/ansible/playbook.yml
+        regexp: "\\{\\{min_ansible_version\\}\\}"
+        replace: "min_ansible_version"
+
+    - name: Enable verbose logging in all roles
+      ansible.builtin.shell: |
+        find /opt/slurm-gcp-repo/ansible/roles -name "*.yml" -exec sed -i 's/ > \/dev\/null//g' {} +
+      args:
+        executable: /bin/bash
+
+    - name: Mark nvidia-container-toolkit packages as held
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - libnvidia-container-tools
+        - libnvidia-container1
+        - nvidia-container-toolkit
+        - nvidia-container-toolkit-base
+      when: ansible_os_family == "Debian"
+      ignore_errors: true
+
+    - name: Include OS Family Dependent Vars
+      ansible.builtin.include_vars: "{{ item }}"
+      with_first_found:
+        - files:
+            - "{{ ansible_facts['distribution']|lower }}-{{ ansible_facts['distribution_version'] }}.yml"
+            - "{{ ansible_facts['distribution']|lower }}-{{ ansible_facts['distribution_major_version'] }}.yml"
+            - "{{ ansible_facts['distribution']|lower }}.yml"
+          skip: true
+
+    - name: Update slurm_extra_vars with OS specific variables
+      ansible.builtin.set_fact:
+        slurm_extra_vars: "{{ slurm_extra_vars | combine(os_slurm_extra_vars | default({})) }}"
+
+    - name: Copy TPU patch
+      ansible.builtin.copy:
+        src: "tpu-2605.patch"
+        dest: "/var/tmp/tpu-2605.patch"
+      when: hw_type == "tpu"
+
+    - name: Include TPU specific variables
+      ansible.builtin.include_vars:
+        file: "tpu.yml"
+      when: hw_type == "tpu"
+
+    - name: Update slurm_extra_vars with TPU specific settings
+      ansible.builtin.set_fact:
+        slurm_extra_vars: "{{ slurm_extra_vars | combine(tpu_slurm_vars) }}"
+      when: hw_type == "tpu"
+
+    - name: Print final slurm_extra_vars
+      ansible.builtin.debug:
+        var: slurm_extra_vars
+
+    - name: Create slurm vars file
+      ansible.builtin.copy:
+        content: "{{ slurm_extra_vars | to_json }}"
+        dest: /var/tmp/slurm_vars.json
+
+    - name: Remove broken helm-gcp-releases repository on Ubuntu
+      ansible.builtin.shell: |
+        find /etc/apt/sources.list.d/ -type f -exec grep -l "helm-gcp-releases" {} + | xargs rm -f
+      failed_when: false
+      when: ansible_facts['distribution'] == "Ubuntu"
+
+    - name: Remove conflicting lustre-client-modules-dkms on Ubuntu
+      ansible.builtin.apt:
+        name: lustre-client-modules-dkms
+        state: absent
+      when: ansible_facts['distribution'] == "Ubuntu"
+
+    - name: Add Official MariaDB GPG key
+      ansible.builtin.get_url:
+        url: https://mariadb.org/mariadb_release_signing_key.pgp
+        dest: /usr/share/keyrings/mariadb-keyring.pgp
+        mode: "0644"
+      when: ansible_facts['distribution'] == "Ubuntu"
+
+    - name: Add Official MariaDB 10.11 LTS Repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/mariadb-keyring.pgp] https://deb.mariadb.org/10.11/ubuntu {{ ansible_facts['distribution_release']
+          }} main"
+        state: present
+        filename: mariadb
+      when: ansible_facts['distribution'] == "Ubuntu"
+
+    - name: Remove hdf5 package blocking on Ubuntu
+      ansible.builtin.file:
+        path: /etc/apt/preferences.d/block-hdf5
+        state: absent
+      when: ansible_facts['distribution'] == "Ubuntu"
+
+    - name: Update apt cache on Ubuntu
+      ansible.builtin.apt:
+        update_cache: true
+      when: ansible_facts['distribution'] == "Ubuntu"
+
+    - name: Ensure EPEL repository is installed on RedHat / Rocky
+      become: true
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Install Perl build dependencies on RedHat / Rocky
+      become: true
+      ansible.builtin.dnf:
+        name:
+          - perl-Switch
+          - perl-devel
+        enablerepo: "{{ 'crb' if ansible_facts['distribution_major_version'] == '9' else 'powertools' }}"
+        state: present
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Ensure GCC/autotools toolchains are available to compile TPU cli_filter
+      ansible.builtin.apt:
+        name:
+          - autoconf
+          - automake
+          - libtool
+          - pkg-config
+          - libglib2.0-dev
+          - build-essential
+        state: present
+      when: hw_type == "tpu" and ansible_facts['distribution'] == "Ubuntu"
+
+    - name: Run the slurm-gcp ansible/playbook.yml with provided variables
+      ansible.builtin.shell: |
+        set -o pipefail
+        ansible-playbook \
+        -i localhost, \
+        --connection=local \
+        playbook.yml \
+        -v \
+        --extra-vars @/var/tmp/slurm_vars.json
+      args:
+        chdir: /opt/slurm-gcp-repo/ansible
+        executable: /bin/bash
+
+      environment:
+        ANSIBLE_STDOUT_CALLBACK: yaml
+        PYTHONUNBUFFERED: "1"
+
+    - name: Ensure TPU topology configuration file is available for worker plugins
+      ansible.builtin.copy:
+        src: tpu.conf
+        dest: /usr/local/etc/slurm/tpu.conf
+        force: false
+      when: hw_type == "tpu"
+
+
+    - name: Shred static Munge key to prevent security exposure in base image
+      ansible.builtin.shell: |
+        if [ -f /etc/munge/munge.key ]; then
+          shred --remove /etc/munge/munge.key
+        fi
+      ignore_errors: true
+  when: install_slurm | default(false) | bool

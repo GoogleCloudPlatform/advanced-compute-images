@@ -16,9 +16,22 @@
 DEBUG_LOG="/var/log/packer-setup-debug.log"
 # Main setup log for "non-noisy" output (clean logs + ansible)
 MAIN_LOG="/var/log/packer-setup.log"
-
 OS_ID=$(awk -F= '$1 == "ID" { gsub(/^"|"$/, "", $2); print $2 }' /etc/os-release)
-echo "The OS ID is: ${OS_ID}"
+OS_VERSION_ID=$(awk -F= '$1 == "VERSION_ID" { gsub(/^"|"$/, "", $2); print $2 }' /etc/os-release | cut -d. -f1)
+echo "The OS ID is: ${OS_ID} (${OS_VERSION_ID})"
+
+# Version Pinning & Path Configurations
+if [[ "${OS_ID}" == "rocky" && "${OS_VERSION_ID}" == "8" ]]; then
+  # TODO: Add comments explaining the complexity of why Rocky 8 needs Ansible 4.10.0
+  ANSIBLE_VERSION="4.10.0"
+elif [[ "${OS_ID}" == "ubuntu" && "${OS_VERSION_ID}" == "24" ]]; then
+  ANSIBLE_VERSION="10.3.0"
+else
+  ANSIBLE_VERSION="8.7.0"
+fi
+echo "Pinned Ansible version: ${ANSIBLE_VERSION}"
+ANSIBLE_VENV_DIR="${ANSIBLE_VENV_DIR:-/opt/ansible-venv}"
+PYTHON_CMD="python3"
 
 # Helper function to print clean, tagged logs to the console AND main log file
 function log_setup() {
@@ -63,12 +76,25 @@ function wait_for_dnf_locks() {
   log_setup "Locks released. Proceeding."
 }
 
+# --- Apt Install Ansible ---
+function install_ansible_using_apt(){
+  dpkg --configure -a || true
+  apt-get update >> "$DEBUG_LOG" 2>&1 && \
+  apt-get install -f -y >> "$DEBUG_LOG" 2>&1 && \
+  apt-get install -y software-properties-common python3-pip python3-venv python3-full >> "$DEBUG_LOG" 2>&1 && \
+  ${PYTHON_CMD} -m venv "${ANSIBLE_VENV_DIR}" >> "$DEBUG_LOG" 2>&1 && \
+  "${ANSIBLE_VENV_DIR}/bin/pip" install --upgrade pip >> "$DEBUG_LOG" 2>&1 && \
+  "${ANSIBLE_VENV_DIR}/bin/pip" install "ansible==${ANSIBLE_VERSION}" >> "$DEBUG_LOG" 2>&1
+}
+
 # -- Dnf Install Ansible ---
 function install_ansible_using_dnf(){
   dnf clean all >> "$DEBUG_LOG" 2>&1 && \
   dnf makecache --refresh >> "$DEBUG_LOG" 2>&1 && \
-  dnf install -y epel-release >> "$DEBUG_LOG" 2>&1 && \
-  dnf install -y ansible >> "$DEBUG_LOG" 2>&1
+  dnf install -y epel-release python3 python3-pip perl-devel gcc make libffi-devel >> "$DEBUG_LOG" 2>&1 && \
+  ${PYTHON_CMD} -m venv "${ANSIBLE_VENV_DIR}" >> "$DEBUG_LOG" 2>&1 && \
+  "${ANSIBLE_VENV_DIR}/bin/pip" install --upgrade pip >> "$DEBUG_LOG" 2>&1 && \
+  "${ANSIBLE_VENV_DIR}/bin/pip" install "ansible==${ANSIBLE_VERSION}" >> "$DEBUG_LOG" 2>&1
 }
 
 function create_custom_junit_callback() {
@@ -115,21 +141,40 @@ EOF
 }
 
 log_setup "--- STARTING PACKER SETUP ---"
-if [[ "${OS_ID}" == "ubuntu" ]]; then
-  wait_for_apt_locks
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update >> "$DEBUG_LOG" 2>&1
-  apt-get install -y ansible >> "$DEBUG_LOG" 2>&1
-else
-  wait_for_dnf_locks
-  install_ansible_using_dnf
+
+# 1. Wait for apt lock / cloud-init if available
+if [[ -x "/usr/bin/cloud-init" ]]; then
+  /usr/bin/cloud-init status --wait > "$DEBUG_LOG" 2>&1
 fi
 
-if command -v ansible &> /dev/null; then
+log_setup "Installing Ansible and dependencies (this may take a moment)..."
+
+if ! (
+  if [[ "${OS_ID}" == "ubuntu" ]]; then
+    wait_for_apt_locks
+    export DEBIAN_FRONTEND=noninteractive
+    install_ansible_using_apt
+  else
+    wait_for_dnf_locks
+    install_ansible_using_dnf
+  fi
+) >> "$DEBUG_LOG" 2>&1; then
+  log_setup "CRITICAL ERROR: Installation failed."
+  log_setup "Dumping the last 50 lines of the debug log for troubleshooting:"
+  echo "------------------ DEBUG LOG START ------------------"
+  tail -n 50 "$DEBUG_LOG"
+  echo "------------------ DEBUG LOG END ------------------"
+  # Signal failure to GCE metadata
+  update_metadata_status "failed"
+  echo "PACKER_BUILD_FAILURE"
+  exit 1
+fi
+
+if [[ -f "${ANSIBLE_VENV_DIR}/bin/ansible" ]]; then
   log_setup "Ansible version:"
-  ansible --version
+  "${ANSIBLE_VENV_DIR}/bin/ansible" --version
 else
-  log_setup "Ansible is not installed or not in PATH."
+  log_setup "Ansible is not installed or not in ${ANSIBLE_VENV_DIR}."
 fi
 
 # 1. Retrieve and Extract Test Bundle
@@ -144,11 +189,14 @@ fi
 curl -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/extra-vars-content" > /tmp/extra-vars.json
 
 log_setup "Installing ansible.posix collection..."
-ansible-galaxy collection install ansible.posix -p /tmp/tests/collections >> "$DEBUG_LOG" 2>&1 || log_setup "Warning: Failed to install ansible.posix collection."
+"${ANSIBLE_VENV_DIR}/bin/ansible-galaxy" collection install ansible.posix -p /tmp/tests/collections >> "$DEBUG_LOG" 2>&1 || log_setup "Warning: Failed to install ansible.posix collection."
 
 # 2. Run Tests
 log_setup "--- RUNNING TESTS ---"
 TEST_START_TIME=$(date +%s)
+ln -sf "${ANSIBLE_VENV_DIR}/bin/ansible" /usr/bin/ansible
+ln -sf "${ANSIBLE_VENV_DIR}/bin/ansible-playbook" /usr/bin/ansible-playbook
+ln -sf "${ANSIBLE_VENV_DIR}/bin/ansible-galaxy" /usr/bin/ansible-galaxy
 pushd /tmp/tests
 # Read test results GCS path from metadata
 TEST_RESULTS_GCS_PATH=$(curl -f -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/test-results-gcs-path" || echo "")
@@ -168,9 +216,9 @@ callbacks_enabled = my_junit
 collections_paths = /tmp/tests/collections
 EOF
 
-  ansible-playbook -i 'localhost,' -c local playbook.yaml --extra-vars "@/tmp/extra-vars.json"
+  "${ANSIBLE_VENV_DIR}/bin/ansible-playbook" -i 'localhost,' -c local playbook.yaml --extra-vars "@/tmp/extra-vars.json"
 else
-  ansible-playbook -i 'localhost,' -c local playbook.yaml --extra-vars "@/tmp/extra-vars.json"
+  "${ANSIBLE_VENV_DIR}/bin/ansible-playbook" -i 'localhost,' -c local playbook.yaml --extra-vars "@/tmp/extra-vars.json"
 fi
 
 ANSIBLE_EXIT_CODE=$?
@@ -178,9 +226,9 @@ popd
 TEST_END_TIME=$(date +%s)
 log_setup "Ansible finished in $((TEST_END_TIME - TEST_START_TIME)) seconds."
 
-if command -v ansible &> /dev/null; then
+if [[ -f "${ANSIBLE_VENV_DIR}/bin/ansible" ]]; then
   echo "Ansible version:"
-  ansible --version
+  "${ANSIBLE_VENV_DIR}/bin/ansible" --version
 fi
 
 echo "Showing content of /tmp/test-results/"
@@ -192,7 +240,7 @@ if [[ -n "$TEST_RESULTS_GCS_PATH" ]]; then
   log_setup "Uploading test results to $TEST_RESULTS_GCS_PATH..."
   gcs_dest="$TEST_RESULTS_GCS_PATH"
 
-  if gsutil cp -r /tmp/test-results/* "$gcs_dest"; then
+  if gcloud storage cp --recursive /tmp/test-results/* "$gcs_dest"; then
     log_setup "Test results uploaded successfully."
   else
     log_setup "CRITICAL ERROR: Failed to upload test results to GCS."

@@ -1,0 +1,146 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+- name: Read package list from file
+  set_fact:
+    package_lines: "{{ lookup('file', output_file).splitlines() }}"
+
+- name: Parse package names
+  set_fact:
+    packages_to_check: "{{ package_lines[1:] | map('regex_replace', '^([^=]+)=.*$', '\\1') | map('replace', '\"', '') | list }}"
+
+- name: Ensure target license directory exists
+  file:
+    path: "{{ license_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Check for license files in Rocky standard locations
+  stat:
+    path: "{{ item.1 }}/{{ item.0 }}/{{ item.2 }}"
+  register: rocky_license_stats
+  # Checks multiple locations for license files
+  loop: "{{ packages_to_check | product(['/usr/share/licenses', '/usr/share/doc']) | product(['COPYING', 'LICENSE', 'LICENSE.txt', 'copyright']) | map('flatten')
+    | list }}"
+  loop_control:
+    label: "Checking {{ item.1 }}/{{ item.0 }}/{{ item.2 }}"
+
+- name: Copy found licenses to central directory
+  copy:
+    src: "{{ item.stat.path }}"
+    dest: "{{ license_dir }}/{{ item.item[0] }}"
+    remote_src: true
+    mode: "0644"
+  when: item.stat.exists
+  loop: "{{ rocky_license_stats.results }}"
+  loop_control:
+    label: "Copying {{ item.stat.path if item.stat.exists else 'skipping' }}"
+
+- name: Collect specialized slurm licenses from custom paths
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "/usr/share/third_party/licenses/{{ item.name }}"
+    remote_src: true
+    mode: "0644"
+  loop:
+    - name: "slurm-gcp"
+      src: "/opt/slurm-gcp-repo/LICENSE"
+  become: true
+  when:
+    - install_slurm
+  ignore_errors: true
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Collect specialized licenses from custom paths
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "/usr/share/third_party/licenses/{{ item.name }}"
+    remote_src: true
+    mode: "0644"
+  loop:
+    - name: "docker-containerd"
+      src: "/usr/share/licenses/containerd.io/LICENSE"
+
+    - name: "spack"
+      src: "/opt/apps/spack/LICENSE-MIT"
+  become: true
+  ignore_errors: true # Useful if a specific version isn't installed on a specific node
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Download specialized licenses from web URLs
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "/usr/share/third_party/licenses/{{ item.name }}"
+    mode: "0644"
+  loop:
+    - name: "lmod"
+      url: "https://raw.githubusercontent.com/TACC/Lmod/main/License"
+
+    - name: "openmpi"
+      url: "https://raw.githubusercontent.com/open-mpi/ompi/main/LICENSE"
+
+    - name: "numactl"
+      url: "https://raw.githubusercontent.com/numactl/numactl/master/LICENSE.GPL2"
+
+    - name: "numactl-devel"
+      url: "https://raw.githubusercontent.com/numactl/numactl/master/LICENSE.LGPL2.1"
+
+    - name: "gcc-gfortran"
+      url: "https://raw.githubusercontent.com/gcc-mirror/gcc/master/COPYING3"
+
+    - name: "git"
+      url: "https://raw.githubusercontent.com/git/git/master/COPYING"
+
+    - name: "curl"
+      url: "https://raw.githubusercontent.com/curl/curl/master/COPYING"
+
+    - name: "kernel-devel"
+      url: "https://raw.githubusercontent.com/torvalds/linux/master/COPYING"
+
+    - name: "python3"
+      url: "https://raw.githubusercontent.com/python/cpython/main/LICENSE"
+
+    - name: "python3-pip"
+      url: "https://raw.githubusercontent.com/pypa/pip/main/LICENSE.txt"
+
+    - name: "docker"
+      url: "https://raw.githubusercontent.com/moby/moby/master/LICENSE"
+
+    - name: "libfabric"
+      url: "https://raw.githubusercontent.com/ofiwg/libfabric/{{ libfabric_version | default('v2.2.0') }}/COPYING"
+
+    - name: "perftest"
+      url: "https://raw.githubusercontent.com/linux-rdma/perftest/master/COPYING"
+  become: true
+  ignore_errors: true
+  loop_control:
+    label: "Downloading {{ item.name }} license"
+
+- name: Download specialized licenses for slurm related packages from web URLs
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "/usr/share/third_party/licenses/{{ item.name }}"
+    mode: "0644"
+  loop:
+    - name: "pyxis"
+      url: "https://raw.githubusercontent.com/NVIDIA/pyxis/main/LICENSE"
+  become: true
+  ignore_errors: true
+  when:
+    - install_slurm
+  loop_control:
+    label: "Downloading {{ item.name }} license"

@@ -18,14 +18,14 @@
       ansible.builtin.command: sestatus
       register: sestatus_out
       changed_when: false
-      when: ansible_os_family == "RedHat"
+      when: ansible_facts['os_family'] == "RedHat"
 
     - name: Assert SELinux is disabled
       ansible.builtin.assert:
         that:
           - "'disabled' in sestatus_out.stdout"
         fail_msg: "SELinux is not disabled. Status: {{ sestatus_out.stdout }}"
-      when: ansible_os_family == "RedHat"
+      when: ansible_facts['os_family'] == "RedHat"
 
   rescue:
     - name: Use the failure_recorder role to log this failure

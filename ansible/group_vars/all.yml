@@ -13,7 +13,7 @@
 # limitations under the License.
 
 ---
-hpc_user: "{{ 'ubuntu' if ansible_os_family == 'Debian' else 'rocky' }}"
+hpc_user: "{{ 'ubuntu' if ansible_facts['os_family'] == 'Debian' else 'rocky' }}"
 spack_root: /opt/apps/spack
 spack_cache_url: gs://ai-hpc-images-spack-cache
 spack_release_version: 1-1

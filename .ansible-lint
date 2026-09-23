@@ -1,0 +1,21 @@
+supported_ansible_also:
+  - "2.11"
+  - "2.15"
+
+skip_list:
+  - "fqcn"
+  - "name"
+  - "jinja"
+  - "var-naming"
+  - "no-changed-when"
+  - "ignore-errors"
+  - "risky-shell-pipe"
+  - "risky-file-permissions"
+  - "key-order"
+  - "latest"
+  - "command-instead-of-shell"
+  - "command-instead-of-module"
+  - "no-handler"
+  - "package-latest"
+  - "role-name"
+  - "yaml[line-length]"

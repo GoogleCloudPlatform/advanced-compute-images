@@ -28,7 +28,6 @@ substitutions:
   _ZONE: "us-central1-a"
   _OVERRIDES: ""
   _TEST_RESULTS_GCS_PATH: ""
-  _IMAGE_NAME_GCS_BUCKET: ""
 
 steps:
 - name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli:slim'
@@ -56,70 +55,88 @@ steps:
 
       packer --version
 
-      # --- Run Packer ---
-      # We pass BUILD_ID so Packer can name the instance uniquely
+      # --- Prepare Ansible Bundle ---
       echo "Bundling and encoding Ansible directory..."
       tar -czf test_bundle.tar.gz -C tests/ansible .
       TEST_BUNDLE_B64=$(base64 -w 0 test_bundle.tar.gz)
       rm test_bundle.tar.gz
 
+      # --- Prepare Packer Arguments ---
       declare -a PACKER_ARGS
-        PACKER_ARGS=(-var-file="packer/builds/${_CONFIG_FILE}")
-        PACKER_ARGS+=(-var="project_id=${PROJECT_ID}")
-        PACKER_ARGS+=(-var="zone=${_ZONE}")
-        PACKER_ARGS+=(-var="build_number=${_BUILD_NUMBER}")
-        PACKER_ARGS+=(-var="build_id=${BUILD_ID}")
-        PACKER_ARGS+=(-var="release_track=${_RELEASE_TRACK}")
-        PACKER_ARGS+=(-var="test_bundle_base64=$$TEST_BUNDLE_B64")
-        PACKER_ARGS+=(-var="test_results_gcs_path=${_TEST_RESULTS_GCS_PATH}")
+      PACKER_ARGS=(-var-file="packer/builds/${_CONFIG_FILE}")
+      PACKER_ARGS+=(-var="project_id=${PROJECT_ID}")
+      PACKER_ARGS+=(-var="build_number=${_BUILD_NUMBER}")
+      PACKER_ARGS+=(-var="build_id=${BUILD_ID}")
+      PACKER_ARGS+=(-var="release_track=${_RELEASE_TRACK}")
+      PACKER_ARGS+=(-var="test_bundle_base64=$$TEST_BUNDLE_B64")
+      PACKER_ARGS+=(-var="test_results_gcs_path=${_TEST_RESULTS_GCS_PATH}")
+      PACKER_ARGS+=(-var="zone=${_ZONE}")
 
+      # Process any overrides passed from the command line
       if [[ -n "${_OVERRIDES}" ]]; then
         echo "Processing overrides from _OVERRIDES: ${_OVERRIDES}"
         IFS=';' read -ra OVERRIDE_PAIRS <<< "${_OVERRIDES}"
 
-        for pair in "${OVERRIDE_PAIRS[@]}"; do
-          if [[ -n "${pair}" ]]; then
-            PACKER_ARGS+=(-var="${pair}")
+        for pair in "$${OVERRIDE_PAIRS[@]}"; do
+          if [[ -n "$${pair}" ]]; then
+            PACKER_ARGS+=(-var="$${pair}")
           fi
         done
       fi
 
-      # --- Get Image Name from GCS ---
-      if [ "${_RELEASE_TRACK}" = "nightly" ] && [ -n "${_IMAGE_NAME_GCS_BUCKET}" ]; then
-        echo "Downloading image name from gs://${_IMAGE_NAME_GCS_BUCKET}/image_name.txt..."
-        gsutil cp "gs://${_IMAGE_NAME_GCS_BUCKET}/image_name.txt" image_name.txt
-        SOURCE_IMAGE=$(cat image_name.txt)
-        echo "Found image to test: $$SOURCE_IMAGE"
-        PACKER_ARGS+=(-var="source_image=$$SOURCE_IMAGE")
+      # --- Resolve Source Image ---
+      echo "Initializing Packer and resolving image family..."
+      packer init tests/packer/
+
+      IMAGE_FAMILY=$(echo 'local.image_family_name' | packer console "$${PACKER_ARGS[@]}" tests/packer/ | tr -d '\r')
+      echo "Image family is: $$IMAGE_FAMILY"
+
+      SOURCE_IMAGE=""
+      if [[ "${_OVERRIDES}" =~ source_image=([^;]+) ]]; then
+        SOURCE_IMAGE="$${BASH_REMATCH[1]}"
+        echo "Using source_image from _OVERRIDES: $$SOURCE_IMAGE"
+      else
+        echo "Querying latest created image (including deprecated) for family $$IMAGE_FAMILY..."
+        SOURCE_IMAGE=$(gcloud compute images list \
+          --project="${PROJECT_ID}" \
+          --show-deprecated \
+          --no-standard-images \
+          --filter="family=$${IMAGE_FAMILY}" \
+          --sort-by="~creationTimestamp" \
+          --limit=1 \
+          --format="value(name)" 2>/dev/null || true)
+        if [ -n "$$SOURCE_IMAGE" ]; then
+          echo "Selected latest image to test: $$SOURCE_IMAGE"
+          PACKER_ARGS+=(-var="source_image=$$SOURCE_IMAGE")
+        fi
       fi
 
       PACKER_ARGS+=(tests/packer/)
-      echo "Constructed Packer arguments:"
-      printf "'%s'\n" "$${PACKER_ARGS[@]}"
 
-      echo "Starting Packer build..."
-      packer init packer/
-      packer build -force "$${PACKER_ARGS[@]}"
+      # --- Build the Test Image ---
+      echo "Starting Packer test build in zone: ${_ZONE}..."
+      echo "Arguments: $${PACKER_ARGS[@]}"
 
-- name: 'gcr.io/google.com/cloudsdktool/google-cloud-cli:slim'
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-      set -e
-      IMAGE_TO_ACTIVATE=""
-      if [ -f image_name.txt ]; then
-        IMAGE_TO_ACTIVATE=$(cat image_name.txt)
-      elif [[ "${_OVERRIDES}" =~ source_image=([^;]+) ]]; then
-        IMAGE_TO_ACTIVATE="$${BASH_REMATCH[1]}"
-      fi
+      status=0
+      packer build -force "$${PACKER_ARGS[@]}" || status=$$?
 
-      if [ -n "$$IMAGE_TO_ACTIVATE" ]; then
-        echo "Tests passed. Activating image $$IMAGE_TO_ACTIVATE..."
-        gcloud compute images deprecate "$$IMAGE_TO_ACTIVATE" --state=ACTIVE --project=${PROJECT_ID}
+      if [ "$$status" -eq 0 ]; then
+        echo "Packer test build succeeded. Tests passed."
+        if [ -n "$$SOURCE_IMAGE" ]; then
+          echo "Ensuring image $$SOURCE_IMAGE is active..."
+          gcloud compute images deprecate "$$SOURCE_IMAGE" --state=ACTIVE --project=${PROJECT_ID} || true
+        fi
       else
-        echo "No image name available for activation. Skipping."
+        echo "Packer test build failed."
+        if [ -n "$$SOURCE_IMAGE" ]; then
+          echo "Deprecating image $$SOURCE_IMAGE from family $$IMAGE_FAMILY due to test failure..."
+          gcloud compute images deprecate "$$SOURCE_IMAGE" --state=DEPRECATED --project=${PROJECT_ID}
+        else
+          echo "Skipping deprecation (custom source_image override used or no image found)."
+        fi
+        exit 1
       fi
+      
 timeout: '1800s'
 options:
   logging: CLOUD_LOGGING_ONLY

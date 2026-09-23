@@ -15,36 +15,57 @@
 ---
 - name: Build ACI Image
   hosts: all
-  become: yes
-  roles:
-    - os_configs
-    - selinux
-    - common
-    - role: cloud_monitoring
+  become: true
+
+  vars:
+    exclude_roles_list: "{{ exclude_roles | default(ansible_exclude_roles | default([])) }}"
+    all_roles:
+      - os_configs
+      - selinux
+      - common
+      - cloud_monitoring
+      - google-hpc-compute
+      - docker
+      - gcloud_cli
+      - gcs_fuse
+      - lustre
+      - spack
+      - lmod
+      - nvidia_stack
+      - nfs
+      - slurm
+      - ompi
+      - rdma
+      - nccl_gib
+    effective_platform_roles: "{{ all_roles | reject('in', exclude_roles_list) | list }}"
+
+  pre_tasks:
+    - name: Display Orchestrated Execution Topology
+      ansible.builtin.debug:
+        msg:
+          - "External Contrib Roles Added: {{ extra_roles | default([]) }}"
+          - "Roles Explicitly Excluded: {{ exclude_roles_list }}"
+          - "Final Effective Core Roles: {{ effective_platform_roles }}"
+
+  tasks:
+    - name: Dynamically resolve and execute core platform roles
+      ansible.builtin.include_role:
+        name: "core/{{ item }}"
+      loop: "{{ effective_platform_roles }}"
+
+    - name: Execute Optional Contrib Roles
+      ansible.builtin.include_role:
+        name: "{{ item }}"
+      loop: "{{ extra_roles | default([]) }}"
       when:
-      - not install_slurm
-    - google-hpc-compute
-    - docker
-    - gcloud_cli
-    - gcs_fuse
-    - role: lustre
-      when:
-      - install_lustre
-      - ansible_architecture == 'x86_64'
-    - spack
-    - lmod
-    - role: nvidia_stack
-      when:
-      - install_nvidia_stack
-    - role: slurm
-      when:
-      - install_slurm
-    - role: ompi
-      when:
-      - install_slurm
-    - role: rdma
-    - role: nccl_gib
-      when:
-      - hw_type == "gpu"
-    - cleanup
-    - license_and_manifest
+        - extra_roles is defined
+        - (extra_roles | length) > 0
+
+  post_tasks:
+    - name: Run Final Cleanup
+      ansible.builtin.include_role:
+        name: core/cleanup
+
+    - name: Generate License and Manifest
+      ansible.builtin.include_role:
+        name: core/license_and_manifest

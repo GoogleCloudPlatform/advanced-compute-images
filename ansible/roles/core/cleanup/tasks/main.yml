@@ -1,0 +1,103 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+# -----------------------------------------------------------------
+#  Spack Production Mirror Swap
+# -----------------------------------------------------------------
+- name: Set Spack initialization snippet
+  ansible.builtin.set_fact:
+    spack_init: |
+      export SPACK_PYTHON=/opt/spack-venv/bin/python{{ python_version }}
+      if [ -f "{{ spack_root }}/share/spack/setup-env.sh" ]; then
+        . "{{ spack_root }}/share/spack/setup-env.sh"
+      fi
+
+- name: Swap Spack Mirrors for Production Image
+  become: true
+  become_user: "{{ hpc_user }}"
+  ansible.builtin.shell: |
+    {{ spack_init }}
+
+    if command -v spack > /dev/null 2>&1; then
+      # 1. Remove the private build cache to protect project credentials
+      spack mirror remove --scope site hpc_cache || true
+
+      # 2. Add the official Google Spack Cache
+      spack mirror add --scope site "{{ google_spack_cache_name }}" "{{ google_spack_cache_url }}"
+
+      # 3. Trust Google Spack Cache signing keys
+      spack buildcache keys --install --trust
+    fi
+
+# -----------------------------------------------------------------
+#  HDF5 Security Hardening & Cleanups
+# -----------------------------------------------------------------
+- name: Pin and block vulnerable system hdf5 packages on Ubuntu
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/block-hdf5
+    content: |
+      Package: hdf5-tools libhdf5-dev libhdf5-103 libhdf5-cpp-103 libhdf5-openmpi-103 libhdf5-openmpi-dev
+      Pin: release *
+      Pin-Priority: -1
+    mode: "0644"
+  when: ansible_facts['distribution'] == "Ubuntu"
+
+- name: Purge vulnerable system hdf5 packages if installed
+  become: true
+  ansible.builtin.apt:
+    name:
+      - hdf5-tools
+      - libhdf5-dev
+      - libhdf5-103
+      - libhdf5-cpp-103
+      - libhdf5-openmpi-103
+      - libhdf5-openmpi-dev
+    state: absent
+    purge: true
+  when: ansible_facts['distribution'] == "Ubuntu"
+
+- name: Remove libhdf5-dev from slurm-gcp playbook dependencies to prevent conflicts with Spack HDF5
+  ansible.builtin.shell: |
+    find /opt/slurm-gcp-repo/ansible -type f \( -name "*.yml" -o -name "*.yaml" \) -exec sed -i '/libhdf5-dev/d' {} +
+  args:
+    executable: /bin/bash
+  failed_when: false
+  when: ansible_facts['distribution'] == "Ubuntu"
+
+# -----------------------------------------------------------------
+#  System Cleanups
+# -----------------------------------------------------------------
+- name: Clean Package Manager Caches (Debian)
+  ansible.builtin.command: apt-get clean
+  become: true
+  when: ansible_facts['os_family'] == 'Debian'
+  changed_when: false
+
+- name: Clean Package Manager Caches (RedHat)
+  ansible.builtin.command: dnf clean all
+  become: true
+  when: ansible_facts['os_family'] == 'RedHat'
+  changed_when: false
+
+- name: Remove Temporary Build Files
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/*
+    - /var/tmp/*
+  ignore_errors: true

@@ -22,7 +22,21 @@ DEBUG_LOG="/var/log/packer-setup-debug.log"
 MAIN_LOG="/var/log/packer-setup.log"
 
 OS_ID=$(awk -F= '$1 == "ID" { gsub(/^"|"$/, "", $2); print $2 }' /etc/os-release)
-echo "The OS ID is: ${OS_ID}"
+OS_VERSION_ID=$(awk -F= '$1 == "VERSION_ID" { gsub(/^"|"$/, "", $2); print $2 }' /etc/os-release | cut -d. -f1)
+echo "The OS ID is: ${OS_ID} (${OS_VERSION_ID})"
+
+# Version Pinning & Path Configurations
+if [[ "${OS_ID}" == "rocky" && "${OS_VERSION_ID}" == "8" ]]; then
+  # TODO: Add comments explaining the complexity of why Rocky 8 needs Ansible 4.10.0
+  ANSIBLE_VERSION="4.10.0"
+elif [[ "${OS_ID}" == "ubuntu" && "${OS_VERSION_ID}" == "24" ]]; then
+  ANSIBLE_VERSION="10.3.0"
+else
+  ANSIBLE_VERSION="8.7.0"
+fi
+echo "Pinned Ansible version: ${ANSIBLE_VERSION}"
+ANSIBLE_VENV_DIR="/opt/ansible-venv"
+PYTHON_CMD="python3"
 
 # Helper function to print clean, tagged logs to the console AND main log file
 function log_setup() {
@@ -72,16 +86,21 @@ function install_ansible_using_apt(){
   dpkg --configure -a || true
   apt-get update && \
   apt-get install -f -y && \
-  apt-get install -y software-properties-common && \
-  apt-get install -y ansible
+  apt-get install -y software-properties-common python3-pip python3-venv python3-full && \
+  ${PYTHON_CMD} -m venv "${ANSIBLE_VENV_DIR}" && \
+  "${ANSIBLE_VENV_DIR}/bin/pip" install --upgrade pip && \
+  "${ANSIBLE_VENV_DIR}/bin/pip" install "ansible==${ANSIBLE_VERSION}"
 }
 
 # -- Dnf Install Ansible ---
 function install_ansible_using_dnf(){
+  rm -f /etc/yum.repos.d/parallelstore*.repo >> "$DEBUG_LOG" 2>&1 || true
   dnf clean all >> "$DEBUG_LOG" 2>&1 && \
   dnf makecache --refresh >> "$DEBUG_LOG" 2>&1 && \
-  dnf install -y epel-release >> "$DEBUG_LOG" 2>&1 && \
-  dnf install -y ansible >> "$DEBUG_LOG" 2>&1
+  dnf install -y epel-release python3 python3-pip perl-devel gcc make libffi-devel >> "$DEBUG_LOG" 2>&1 && \
+  ${PYTHON_CMD} -m venv "${ANSIBLE_VENV_DIR}" >> "$DEBUG_LOG" 2>&1 && \
+  "${ANSIBLE_VENV_DIR}/bin/pip" install --upgrade pip >> "$DEBUG_LOG" 2>&1 && \
+  "${ANSIBLE_VENV_DIR}/bin/pip" install "ansible==${ANSIBLE_VERSION}" >> "$DEBUG_LOG" 2>&1
 }
 
 log_setup "--- STARTING PACKER SETUP ---"
@@ -131,9 +150,12 @@ curl -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetada
 # 3. Run Ansible
 log_setup "--- RUNNING ANSIBLE ---"
 ANSIBLE_START_TIME=$(date +%s)
+ln -sf "${ANSIBLE_VENV_DIR}/bin/ansible" /usr/bin/ansible
+ln -sf "${ANSIBLE_VENV_DIR}/bin/ansible-playbook" /usr/bin/ansible-playbook
+ln -sf "${ANSIBLE_VENV_DIR}/bin/ansible-galaxy" /usr/bin/ansible-galaxy
 pushd /tmp/ansible
 ANSIBLE_EXIT_CODE=0
-ansible-playbook -i 'localhost,' -c local playbook.yaml --extra-vars "@/tmp/extra-vars.json" || ANSIBLE_EXIT_CODE=$?
+"${ANSIBLE_VENV_DIR}/bin/ansible-playbook" -i 'localhost,' -c local playbook.yaml --extra-vars "@/tmp/extra-vars.json" || ANSIBLE_EXIT_CODE=$?
 popd
 ANSIBLE_END_TIME=$(date +%s)
 log_setup "Ansible finished in $((ANSIBLE_END_TIME - ANSIBLE_START_TIME)) seconds."
@@ -147,26 +169,13 @@ function run_cleanup() {
   # Remove other log files
   find /var/log -type f \( -name "*.log" -o -name "*.1" -o -name "*.gz" \) -delete
   # Remove bash history
-  find / -xdev -type f -name ".bash_history" -delete
+  find / -xdev -type f -name ".bash_history" -delete 2>/dev/null || true
   # Remove SSH keys
   rm -f /root/.ssh/authorized_keys
   rm -f "/home/${build_user}/.ssh/authorized_keys"
   # Clean temp directories, leaving Ansible's own temp files untouched for now
   find /tmp /var/tmp -mindepth 1 ! -name 'ansible_*' -delete
   sync
-  if [[ "${OS_ID}" == "ubuntu" ]]; then
-    wait_for_apt_locks
-    # Removing Ansible installation as CTK blueprints have their own installation setup
-    apt-get purge -y ansible
-    apt-get autoremove -y
-    log_setup "Ansible removed."
-  else
-    wait_for_dnf_locks
-    if dnf list installed ansible &>/dev/null; then
-        dnf remove -y ansible
-        log_setup "Ansible removed."
-    fi
-  fi
   log_setup "--- Cleanup Complete ---"
 }
 

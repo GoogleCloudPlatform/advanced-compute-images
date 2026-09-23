@@ -83,7 +83,7 @@ if curl -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMet
     SBOM_GCS_PATH=$(curl -f -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/sbom-gcs-path" || echo "")
     if [[ -n "$SBOM_GCS_PATH" ]]; then
       log_setup "Uploading SBOM to $SBOM_GCS_PATH..."
-      if gsutil cp /tmp/sbom.spdx.json "$SBOM_GCS_PATH"; then
+      if gcloud storage cp /tmp/sbom.spdx.json "$SBOM_GCS_PATH"; then
          log_setup "SBOM uploaded successfully."
       else
          fail "Failed to upload SBOM to GCS."

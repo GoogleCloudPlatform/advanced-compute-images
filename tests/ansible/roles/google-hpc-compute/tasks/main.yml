@@ -69,14 +69,14 @@
         ansible.builtin.fail:
           msg: "powertools repository is not enabled."
         when:
-          - ansible_distribution_major_version == '8'
+          - ansible_facts['distribution_major_version'] == '8'
           - "'powertools' not in repolist_check.stdout"
 
       - name: Fail if crb repository is not enabled (EL9)
         ansible.builtin.fail:
           msg: "crb repository is not enabled."
         when:
-          - ansible_distribution_major_version == '9'
+          - ansible_facts['distribution_major_version'] == '9'
           - "'crb' not in repolist_check.stdout"
 
   - name: Verify system configurations
@@ -116,11 +116,16 @@
           msg: "IRDMA repos RPM is not installed."
         when: irdma_repos_check.rc != 0
 
-      - name: Check if RDMA packages are installed
-        ansible.builtin.package:
-          name: "{{ rdma_pkg_list }}"
-          state: present
-        check_mode: true
+      - name: Check if RDMA RPM packages are installed
+        ansible.builtin.command: "rpm -q {{ item }}"
+        loop:
+          - kmod-idpf-irdma
+          - infiniband-diags
+        changed_when: false
+
+      - name: Check if perftest utilities are installed
+        ansible.builtin.command: "which ib_write_bw"
+        changed_when: false
 
   rescue:
   - name: Use the failure_recorder role to log this failure

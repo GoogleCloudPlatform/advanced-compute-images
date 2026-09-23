@@ -1,0 +1,74 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+# Defaults for google-hpc-compute role
+
+# Feature Flags
+enable_intel_compliance: false
+hpc_os_folder: "{{ ansible_facts['distribution'] | lower }}{{ ansible_facts['distribution_major_version'] }}"
+
+hpc_gcs_bucket: "gs://hpc-image-build"
+
+# rpm_location is a lazy template. It will evaluate 'hpc_rpm_date' at runtime.
+rpm_location: "{{ hpc_gcs_bucket }}/rpms/signed/{{ hpc_rpm_date }}/{{ ansible_facts['distribution'] | lower | replace(' ', '-') }}-linux-{{ ansible_facts['distribution_major_version']
+  }}"
+
+# Repository URLs
+google_hpc_repo_url: "https://packages.cloud.google.com/yum/repos/google-hpc-compute-el{{ ansible_facts['distribution_major_version'] }}-x86_64"
+intel_repo_url: "https://yum.repos.intel.com/hpc-platform/el{{ '7' if ansible_facts['distribution_major_version'] | int == 9 else '8' }}"
+irdma_repo_url: "https://depot.ciq.com/public/files/gce-accelerator/irdma-kernel-modules-el9-x86_64/irdma-repos.rpm"
+
+# Package Lists
+el8_rpm_list:
+  - kernel
+  - libXt
+  - nfs-utils
+  - pciutils
+  - pdsh-rcmd-ssh
+  - redhat-lsb-core
+  - redhat-lsb-cxx
+  - rsh
+  - screen
+  - wget
+  - zsh
+
+el8_group_list:
+  - "Development tools"
+
+el9_rpm_list:
+  - kernel
+  - libXt
+  - nfs-utils
+  - pciutils
+  - pdsh-rcmd-ssh
+  - rsh
+  - screen
+  - wget
+  - zsh
+
+el9_group_list:
+  - "Development tools"
+
+hpc_rpm_list:
+  - google-hpc-compute
+
+rdma_pkg_list:
+  - kmod-idpf-irdma
+
+# RPM Build Configuration
+hpc_rpm_name: "google-hpc-compute"
+hpc_rpm_version: "2.0"
+hpc_rpm_release: "1"
+rpmbuild_dir: "/tmp/rpmbuild"

@@ -1,0 +1,112 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+- name: Install RPM Build Dependencies
+  ansible.builtin.dnf:
+    name:
+      - rpm-build
+      - rpmdevtools
+      - tar
+      - wget
+    state: present
+
+- name: Create rpmbuild directory structure
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ rpmbuild_dir }}/SOURCES"
+    - "{{ rpmbuild_dir }}/SPECS"
+    - "{{ rpmbuild_dir }}/BUILD"
+    - "{{ rpmbuild_dir }}/RPMS"
+
+- name: Create temporary staging directory for sources
+  ansible.builtin.file:
+    path: "{{ rpmbuild_dir }}/SOURCES/{{ hpc_rpm_name }}-{{ hpc_rpm_version }}"
+    state: directory
+    mode: "0755"
+
+- name: Stage Common RPM Source Files
+  ansible.builtin.copy:
+    src: "common/{{ item }}"
+    dest: "{{ rpmbuild_dir }}/SOURCES/{{ hpc_rpm_name }}-{{ hpc_rpm_version }}/"
+    mode: "0755"
+  loop:
+    - mpi-tuning.sh
+    - google_hpc_firstrun
+    - google_install_intelmpi
+    - google_disable_automatic_updates
+    - google-hpc-firstrun.service
+
+- name: Stage OS-Specific RPM Source Files
+  ansible.builtin.copy:
+    src: "{{ hpc_os_folder }}/{{ item }}"
+    dest: "{{ rpmbuild_dir }}/SOURCES/{{ hpc_rpm_name }}-{{ hpc_rpm_version }}/"
+    mode: "0755"
+  loop:
+    - google_hpc_multiqueue
+    - google-hpc-multiqueue.service
+
+- name: Stage Libfabric Patches
+  ansible.builtin.copy:
+    src: libfabric
+    dest: "{{ rpmbuild_dir }}/SOURCES/{{ hpc_rpm_name }}-{{ hpc_rpm_version }}/"
+    mode: "0755"
+
+- name: Stage vmroot directory
+  ansible.builtin.copy:
+    src: common/vmroot
+    dest: "{{ rpmbuild_dir }}/SOURCES/{{ hpc_rpm_name }}-{{ hpc_rpm_version }}/"
+    mode: "0755"
+
+- name: Create source tarball
+  ansible.builtin.archive:
+    path: "{{ rpmbuild_dir }}/SOURCES/{{ hpc_rpm_name }}-{{ hpc_rpm_version }}"
+    dest: "{{ rpmbuild_dir }}/SOURCES/{{ hpc_rpm_name }}_{{ hpc_rpm_version }}.orig.tar.gz"
+    format: gz
+
+- name: Clean up temporary staging directory
+  ansible.builtin.file:
+    path: "{{ rpmbuild_dir }}/SOURCES/{{ hpc_rpm_name }}-{{ hpc_rpm_version }}"
+    state: absent
+
+- name: Generate RPM Spec File from Template
+  ansible.builtin.template:
+    src: google-hpc-compute.spec.j2
+    dest: "{{ rpmbuild_dir }}/SPECS/google-hpc-compute.spec"
+    mode: "0644"
+
+- name: Build RPM Package
+  ansible.builtin.command:
+    cmd: "rpmbuild --define '_topdir {{ rpmbuild_dir }}' -bb {{ rpmbuild_dir }}/SPECS/google-hpc-compute.spec"
+  register: rpmbuild_result
+  changed_when: true
+
+- name: Verify RPM was built
+  ansible.builtin.find:
+    paths: "{{ rpmbuild_dir }}/RPMS"
+    patterns: "*.rpm"
+    recurse: true
+  register: built_rpms
+
+- name: Fail if no RPM was built
+  ansible.builtin.fail:
+    msg: "No RPM package was found in {{ rpmbuild_dir }}/RPMS after build."
+  when: built_rpms.matched == 0
+
+- name: Set built RPM path fact
+  ansible.builtin.set_fact:
+    local_built_rpm_path: "{{ built_rpms.files[0].path }}"

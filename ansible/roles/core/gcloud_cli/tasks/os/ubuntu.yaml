@@ -1,0 +1,45 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+- name: Create the secure keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Download and dearmor Google Cloud public signing key
+  ansible.builtin.shell:
+    cmd: "curl -sS https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg"
+    creates: /usr/share/keyrings/cloud.google.gpg
+  tags:
+    - key
+
+- name: Add Google Cloud SDK repository with signed-by directive
+  ansible.builtin.lineinfile:
+    path: /etc/apt/sources.list.d/google-cloud-sdk.list
+    line: "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main"
+    create: true
+    state: present
+    mode: "0644"
+  tags:
+    - repository
+
+- name: Install the Google Cloud CLI package
+  ansible.builtin.apt:
+    name: google-cloud-cli
+    state: latest
+    update_cache: true
+  become: true

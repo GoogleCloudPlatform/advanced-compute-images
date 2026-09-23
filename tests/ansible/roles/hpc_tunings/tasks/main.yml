@@ -1,0 +1,285 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- name: Block for {{ ansible_role_name }} tasks
+  block:
+    # --------------------------------------------------------------------------
+    # 1. Resource Limits Verification (tunings_applied_common_test)
+    # --------------------------------------------------------------------------
+    - name: Find HPC limits configuration files
+      ansible.builtin.find:
+        paths: /etc/security/limits.d
+        patterns:
+          - "98-google-hpc-image.conf"
+          - "99-unlimited.conf"
+      register: hpc_limits_found
+
+    - name: Verify limits content if limits configuration files are present
+      when: hpc_limits_found.matched > 0
+      block:
+        - name: Read content of found limits configuration files
+          ansible.builtin.slurp:
+            src: "{{ item.path }}"
+          loop: "{{ hpc_limits_found.files }}"
+          register: hpc_limits_files_raw
+
+        - name: Aggregate limits files content
+          ansible.builtin.set_fact:
+            hpc_limits_aggregated: "{{ hpc_limits_files_raw.results | map(attribute='content') | map('b64decode') | join('\n') }}"
+
+        - name: Assert memlock unlimited is configured
+          ansible.builtin.assert:
+            that:
+              - >-
+                hpc_limits_aggregated is search('(?m)^\*\s+-\s+memlock\s+unlimited')
+            fail_msg: "HPC Tuning Failure: memlock unlimited not found in /etc/security/limits.d/"
+
+        - name: Assert nofile limit is configured
+          ansible.builtin.assert:
+            that:
+              - >-
+                hpc_limits_aggregated is search('(?m)^\*\s+-\s+nofile\s+1048576')
+            fail_msg: "HPC Tuning Failure: nofile 1048576 not found in /etc/security/limits.d/"
+
+        - name: Assert nproc unlimited is configured
+          ansible.builtin.assert:
+            that:
+              - >-
+                hpc_limits_aggregated is search('(?m)^\*\s+-\s+nproc\s+unlimited')
+            fail_msg: "HPC Tuning Failure: nproc unlimited not found in /etc/security/limits.d/"
+
+    - name: Verify in-guest PAM session memlock limit
+      ansible.builtin.shell: "su -s /bin/bash -c 'ulimit -l' root"
+      register: ulimit_memlock_out
+      changed_when: false
+      check_mode: no
+
+    - name: Assert memlock ulimit is unlimited in user session
+      ansible.builtin.assert:
+        that:
+          - "ulimit_memlock_out.stdout | trim == 'unlimited'"
+        fail_msg: "HPC Tuning Failure: PAM session ulimit -l is '{{ ulimit_memlock_out.stdout | trim }}', expected 'unlimited'"
+
+    - name: Verify in-guest PAM session nofile limit
+      ansible.builtin.shell: "su -s /bin/bash -c 'ulimit -n' root"
+      register: ulimit_nofile_out
+      changed_when: false
+      check_mode: no
+
+    - name: Assert nofile ulimit meets minimum HPC threshold (>= 65536)
+      ansible.builtin.assert:
+        that:
+          - "(ulimit_nofile_out.stdout | trim | int) >= 65536 or ulimit_nofile_out.stdout | trim == 'unlimited'"
+        fail_msg: "HPC Tuning Failure: PAM session ulimit -n is '{{ ulimit_nofile_out.stdout | trim }}', expected >= 65536"
+
+    # --------------------------------------------------------------------------
+    # 2. Firewall and Security Subsystem Tuning (tunings_applied_common_test)
+    # --------------------------------------------------------------------------
+    - name: Gather service facts for firewall and service checks
+      ansible.builtin.service_facts:
+
+    - name: Assert firewalld is not active on RedHat
+      ansible.builtin.assert:
+        that:
+          - "'firewalld.service' not in ansible_facts.services or ansible_facts.services['firewalld.service'].state != 'running'"
+        fail_msg: "HPC Tuning Failure: firewalld is active, expected inactive/disabled for HPC performance"
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Assert ufw is not active on Debian/Ubuntu
+      ansible.builtin.assert:
+        that:
+          - "'ufw.service' not in ansible_facts.services or ansible_facts.services['ufw.service'].state != 'running'"
+        fail_msg: "HPC Tuning Failure: ufw is active, expected inactive for HPC performance"
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Check SELinux status on RedHat
+      ansible.builtin.command: sestatus
+      register: sestatus_check
+      failed_when: false
+      changed_when: false
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Assert SELinux is disabled on RedHat
+      ansible.builtin.assert:
+        that:
+          - "'disabled' in sestatus_check.stdout"
+        fail_msg: "HPC Tuning Failure: SELinux is not disabled on RedHat. Output: {{ sestatus_check.stdout }}"
+      when: ansible_facts['os_family'] == "RedHat" and sestatus_check.rc == 0
+
+    # --------------------------------------------------------------------------
+    # 3. Tuned Profiles & Dynamic Tunings (tunings_applied_hpcprofile_test)
+    # --------------------------------------------------------------------------
+    - name: Check if tuned-adm is available
+      ansible.builtin.command: which tuned-adm
+      register: tuned_adm_check
+      failed_when: false
+      changed_when: false
+
+    - name: Verify tuned profile when tuned-adm is installed
+      when: tuned_adm_check.rc == 0
+      block:
+        - name: Get active tuned profile
+          ansible.builtin.shell: "tuned-adm active"
+          register: tuned_active_out
+          failed_when: false
+          changed_when: false
+
+        - name: Assert tuned profile is active if tuned service is running
+          ansible.builtin.assert:
+            that:
+              - "'Active profile:' in tuned_active_out.stdout or 'Current active profile:' in tuned_active_out.stdout"
+            fail_msg: "HPC Tuning Failure: tuned service is running but no active tuned profile was found: {{ tuned_active_out.stdout }}"
+          when:
+            - "'tuned.service' in ansible_facts.services"
+            - "ansible_facts.services['tuned.service'].state == 'running'"
+
+    # --------------------------------------------------------------------------
+    # 4. Kernel & Network Sysctl Tunings (tunings_applied_hpcprofile_test)
+    # --------------------------------------------------------------------------
+    - name: Check net.ipv4.tcp_rmem
+      ansible.builtin.shell: "sysctl -n net.ipv4.tcp_rmem"
+      register: tcp_rmem_out
+      changed_when: false
+      check_mode: no
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Assert net.ipv4.tcp_rmem maximum buffer meets HPC throughput requirement (>= 16777216)
+      ansible.builtin.assert:
+        that:
+          - "(tcp_rmem_out.stdout.split() | last | int) >= 16777216"
+        fail_msg: "HPC Tuning Failure: net.ipv4.tcp_rmem max buffer is {{ tcp_rmem_out.stdout.split() | last }}, expected >= 16777216"
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Check net.ipv4.tcp_wmem
+      ansible.builtin.shell: "sysctl -n net.ipv4.tcp_wmem"
+      register: tcp_wmem_out
+      changed_when: false
+      check_mode: no
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Assert net.ipv4.tcp_wmem maximum buffer meets HPC throughput requirement (>= 16777216)
+      ansible.builtin.assert:
+        that:
+          - "(tcp_wmem_out.stdout.split() | last | int) >= 16777216"
+        fail_msg: "HPC Tuning Failure: net.ipv4.tcp_wmem max buffer is {{ tcp_wmem_out.stdout.split() | last }}, expected >= 16777216"
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Check net.ipv4.tcp_fastopen
+      ansible.builtin.shell: "sysctl -n net.ipv4.tcp_fastopen"
+      register: tcp_fastopen_out
+      changed_when: false
+      check_mode: no
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Assert net.ipv4.tcp_fastopen is enabled (= 3)
+      ansible.builtin.assert:
+        that:
+          - "tcp_fastopen_out.stdout | trim == '3'"
+        fail_msg: "HPC Tuning Failure: net.ipv4.tcp_fastopen is {{ tcp_fastopen_out.stdout | trim }}, expected 3"
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Check net.core.somaxconn
+      ansible.builtin.shell: "sysctl -n net.core.somaxconn"
+      register: somaxconn_out
+      changed_when: false
+      check_mode: no
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Assert net.core.somaxconn is tuned for HPC connections (>= 1024)
+      ansible.builtin.assert:
+        that:
+          - "(somaxconn_out.stdout | trim | int) >= 1024"
+        fail_msg: "HPC Tuning Failure: net.core.somaxconn is {{ somaxconn_out.stdout | trim }}, expected >= 1024"
+      when: ansible_facts['os_family'] == "RedHat"
+
+    # --------------------------------------------------------------------------
+    # 5. Transparent Huge Pages (THP) Verification (tunings_applied_hpcprofile_test)
+    # --------------------------------------------------------------------------
+    - name: Check Transparent Huge Pages (THP) enabled state
+      ansible.builtin.stat:
+        path: /sys/kernel/mm/transparent_hugepage/enabled
+      register: thp_stat
+
+    - name: Verify THP matches active tuned profile
+      when: thp_stat.stat.exists
+      block:
+        - name: Read THP enabled value
+          ansible.builtin.slurp:
+            src: /sys/kernel/mm/transparent_hugepage/enabled
+          register: thp_enabled_raw
+
+        - name: Decode THP enabled value
+          ansible.builtin.set_fact:
+            thp_enabled_val: "{{ thp_enabled_raw.content | b64decode | trim }}"
+
+        - name: Assert THP is [always] when throughput profile is active
+          ansible.builtin.assert:
+            that:
+              - "'[always]' in thp_enabled_val"
+            fail_msg: "HPC Tuning Failure: Expected THP [always] for throughput profile, but found '{{ thp_enabled_val }}'"
+          when: "'throughput' in (tuned_active_out.stdout | default(''))"
+
+        - name: Assert THP is [never] or [madvise] for default/latency profile
+          ansible.builtin.assert:
+            that:
+              - "'[always]' not in thp_enabled_val"
+            fail_msg: "HPC Tuning Failure: Expected THP [never] or [madvise] for latency profile, but found '{{ thp_enabled_val }}'"
+          when: "'throughput' not in (tuned_active_out.stdout | default(''))"
+
+    # --------------------------------------------------------------------------
+    # 6. Multiqueue Service & Configuration (tunings_applied_multiqueue_test)
+    # --------------------------------------------------------------------------
+    - name: Check google-hpc-multiqueue service file on RedHat
+      ansible.builtin.stat:
+        path: /usr/lib/systemd/system/google-hpc-multiqueue.service
+      register: hpc_multiqueue_service_stat
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Verify google-hpc-multiqueue service configuration when present
+      when:
+        - ansible_facts['os_family'] == "RedHat"
+        - hpc_multiqueue_service_stat.stat.exists
+      block:
+        - name: Check google-hpc-multiqueue systemd unit
+          ansible.builtin.systemd:
+            name: google-hpc-multiqueue.service
+          register: multiqueue_unit_status
+          check_mode: yes
+
+        - name: Report multiqueue service status
+          ansible.builtin.debug:
+            msg: "google-hpc-multiqueue service is enabled: {{ multiqueue_unit_status.enabled | default(false) }}"
+
+    # --------------------------------------------------------------------------
+    # 7. MPI Tuning Script Presence
+    # --------------------------------------------------------------------------
+    - name: Check google_mpi_tuning executable on RedHat
+      ansible.builtin.stat:
+        path: /usr/bin/google_mpi_tuning
+      register: mpi_tuning_stat
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Assert google_mpi_tuning is executable when present
+      ansible.builtin.assert:
+        that:
+          - "mpi_tuning_stat.stat.executable"
+        fail_msg: "HPC Tuning Failure: /usr/bin/google_mpi_tuning is present but not executable"
+      when:
+        - ansible_facts['os_family'] == "RedHat"
+        - mpi_tuning_stat.stat.exists
+
+  rescue:
+    - name: Use the failure_recorder role to log this failure
+      ansible.builtin.include_role:
+        name: common_failure_recorder
