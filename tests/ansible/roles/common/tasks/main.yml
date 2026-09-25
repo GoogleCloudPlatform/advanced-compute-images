@@ -79,6 +79,50 @@
         fail_msg: "Firstrun flag still exists on RedHat/Rocky VM, indicating first-boot tuning failed to execute or clean up."
       when: ansible_facts['os_family'] == "RedHat"
 
+    # Self-contained toolchain checks. These deliberately do not rely on
+    # common_packages above: that list is loaded from a path outside the test
+    # bundle and is silently skipped in CI. Slurm-GCP >= 6.12.2 uninstalls
+    # scl-utils by default, which also removes gcc-toolset-* and clang
+    # (clang-libs requires gcc-toolset-15-gcc-c++).
+    - name: Define required RedHat toolchain packages
+      ansible.builtin.set_fact:
+        required_toolchain_packages: >-
+          {{ ['scl-utils', 'gcc-toolset-12-gcc', 'gcc-toolset-12-gcc-c++']
+             + (['gcc-toolset-15-gcc', 'clang'] if (el9_slurm | bool) else []) }}
+      vars:
+        el9_slurm: "{{ (install_slurm | default(false) | bool) and ansible_facts['distribution_major_version'] == '9' }}"
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Verify RedHat toolchain packages are installed
+      ansible.builtin.assert:
+        that:
+          - "item in ansible_facts.packages"
+        fail_msg: "Required toolchain package {{ item }} is not installed."
+      loop: "{{ required_toolchain_packages | default([]) }}"
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Verify gcc-toolset compilers are usable
+      ansible.builtin.shell: |
+        set -o pipefail
+        source /opt/rh/gcc-toolset-{{ item }}/enable
+        gcc -dumpversion | cut -d. -f1
+      args:
+        executable: /bin/bash
+      register: gcc_toolset_version
+      changed_when: false
+      failed_when: gcc_toolset_version.rc != 0 or (gcc_toolset_version.stdout | trim) != (item | string)
+      loop: "{{ [12, 15] if ((install_slurm | default(false) | bool) and ansible_facts['distribution_major_version'] == '9') else [12] }}"
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Verify clang is usable
+      ansible.builtin.command: clang --version
+      register: clang_version
+      changed_when: false
+      when:
+        - ansible_facts['os_family'] == "RedHat"
+        - ansible_facts['distribution_major_version'] == '9'
+        - install_slurm | default(false) | bool
+
   rescue:
     - name: Use the failure_recorder role to log this failure
       ansible.builtin.include_role:
