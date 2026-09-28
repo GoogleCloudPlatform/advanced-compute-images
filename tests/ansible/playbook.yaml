@@ -64,7 +64,7 @@
     - name: Import Test for openmpi
       ansible.builtin.include_role:
         name: ompi
-      when: install_slurm
+      when: install_slurm and hw_type != "tpu"
 
     - name: Import Tests for CPUs
       ansible.builtin.include_role:
