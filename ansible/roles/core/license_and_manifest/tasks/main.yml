@@ -548,3 +548,17 @@
     - generate_license/os/{{ ansible_facts['distribution']|lower }}-{{ ansible_facts['distribution_version'] }}.yml
     - generate_license/os/{{ ansible_facts['distribution']|lower }}-{{ ansible_facts['distribution_major_version'] }}.yml
     - generate_license/os/{{ ansible_facts['distribution']|lower }}.yml
+
+- name: Copy third party licenses (TPU specific)
+  ansible.builtin.shell: |
+    mkdir -p /usr/share/third_party/open-source/
+    mkdir -p /usr/share/third_party/proprietary-source/
+    gcloud storage cp gs://ospo-hcs-licenses/THIRD_PARTY_NOTICES.txt /usr/share/third_party/
+    gcloud storage cp --recursive gs://ospo-hcs-licenses/open-source/ /usr/share/third_party/
+    gcloud storage cp --recursive gs://ospo-hcs-licenses/proprietary-source/ /usr/share/third_party/
+  ignore_errors: true
+  changed_when: false
+  environment:
+    PATH: "{{ ansible_facts['env']['PATH'] }}:/snap/bin"
+  become: true
+  when: hw_type == "tpu"

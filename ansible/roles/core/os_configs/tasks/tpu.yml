@@ -56,12 +56,3 @@
     marker: "# {mark} ANSIBLE MANAGED TPU ENROOT PATHS"
     create: true
     mode: '0644'
-
-- name: Copy third party licenses
-  ansible.builtin.shell: |
-    mkdir -p /usr/share/third_party/open-source/
-    mkdir -p /usr/share/third_party/proprietary-source/
-    gcloud storage cp gs://ospo-hcs-licenses/THIRD_PARTY_NOTICES.txt /usr/share/third_party/ || true
-    gcloud storage cp --recursive gs://ospo-hcs-licenses/open-source/ /usr/share/third_party/ || true
-    gcloud storage cp --recursive gs://ospo-hcs-licenses/proprietary-source/ /usr/share/third_party/ || true
-  ignore_errors: true
