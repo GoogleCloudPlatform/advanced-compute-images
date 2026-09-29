@@ -178,6 +178,474 @@
           - "'localhost' in hosts_file_content"
         fail_msg: "GuestOS Configuration Failure: 127.0.0.1 localhost entry missing from /etc/hosts"
 
+    # --------------------------------------------------------------------------
+    # 7. GCE Guest Agent & Metadata Script Lifecycle (startup_script_test / shutdown_script_test)
+    # --------------------------------------------------------------------------
+    - name: Verify GCE Guest Agent service or daemon is active
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if systemctl is-active --quiet google-guest-agent-manager.service || \
+           systemctl is-active --quiet google-guest-agent.service || \
+           pgrep -f "google_guest_agent|core_plugin" >/dev/null 2>&1; then
+          echo "GUEST_AGENT_ACTIVE=true"
+        else
+          systemctl status google-guest-agent-manager.service google-guest-agent.service --no-pager >&2 || true
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      register: guest_agent_active_out
+      changed_when: false
+      check_mode: no
+
+    - name: Assert GCE Guest Agent is active
+      ansible.builtin.assert:
+        that:
+          - "'GUEST_AGENT_ACTIVE=true' in guest_agent_active_out.stdout"
+        fail_msg: "GuestOS Validation Failure: GCE Guest Agent is not active ({{ guest_agent_active_out.stderr | default('') }})"
+
+    - name: Check GCE startup and shutdown script systemd unit enablement
+      ansible.builtin.shell: |
+        set -euo pipefail
+        STARTUP_ENABLED=$(systemctl is-enabled google-startup-scripts.service 2>/dev/null || echo "missing")
+        SHUTDOWN_ENABLED=$(systemctl is-enabled google-shutdown-scripts.service 2>/dev/null || echo "missing")
+        echo "STARTUP=${STARTUP_ENABLED} SHUTDOWN=${SHUTDOWN_ENABLED}"
+      args:
+        executable: /bin/bash
+      register: metadata_script_units_out
+      changed_when: false
+      check_mode: no
+
+    - name: Assert GCE startup and shutdown script systemd services are enabled
+      ansible.builtin.assert:
+        that:
+          - "'STARTUP=enabled' in metadata_script_units_out.stdout"
+          - "'SHUTDOWN=enabled' in metadata_script_units_out.stdout"
+        fail_msg: "GuestOS Validation Failure: google-startup-scripts or google-shutdown-scripts service is not enabled ({{ metadata_script_units_out.stdout }})"
+
+    - name: Verify gcloud CLI is installed and accessible for Stage 2 control-plane tests
+      ansible.builtin.shell: |
+        set -euo pipefail
+        command -v gcloud
+        gcloud --version >/dev/null
+      args:
+        executable: /bin/bash
+      register: gcloud_check_out
+      changed_when: false
+      check_mode: no
+
+    - name: Assert gcloud CLI is installed and accessible
+      ansible.builtin.assert:
+        that:
+          - "gcloud_check_out.rc == 0"
+          - "gcloud_check_out.stdout | trim | length > 0"
+        fail_msg: "GuestOS Validation Failure: gcloud CLI is not installed or accessible in PATH"
+
+    - name: Query GCE instance identity metadata (instance name, zone, project)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        INSTANCE_NAME=$(curl -s -f -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/name")
+        ZONE_PATH=$(curl -s -f -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/zone")
+        ZONE=$(basename "$ZONE_PATH")
+        PROJECT_ID=$(curl -s -f -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/project/project-id")
+        printf "%s\n%s\n%s\n" "$INSTANCE_NAME" "$ZONE" "$PROJECT_ID"
+      args:
+        executable: /bin/bash
+      register: gce_instance_meta
+      changed_when: false
+      check_mode: no
+
+    - name: Set GCE instance facts for Stage 2 control-plane tests
+      ansible.builtin.set_fact:
+        gce_instance_name: "{{ gce_instance_meta.stdout_lines[0] }}"
+        gce_instance_zone: "{{ gce_instance_meta.stdout_lines[1] }}"
+        gce_project_id: "{{ gce_instance_meta.stdout_lines[2] }}"
+
+    - name: Verify GCE metadata shutdown-script execution hook (shutdown_script_test)
+      block:
+        - name: Inject test shutdown-script into GCE instance metadata and trigger runner
+          ansible.builtin.shell: |
+            set -euo pipefail
+            rm -f /var/tmp/gos_shutdown_test_marker /tmp/gos_shutdown_test.sh
+            printf '#!/bin/bash\necho GOS_SHUTDOWN_OK > /var/tmp/gos_shutdown_test_marker\n' > /tmp/gos_shutdown_test.sh
+            chmod +x /tmp/gos_shutdown_test.sh
+            gcloud compute instances add-metadata "{{ gce_instance_name }}" \
+              --zone="{{ gce_instance_zone }}" \
+              --project="{{ gce_project_id }}" \
+              --metadata-from-file="shutdown-script=/tmp/gos_shutdown_test.sh" >/dev/null
+
+            # Wait up to 15s for the local metadata server to reflect the shutdown-script attribute
+            for _ in {1..15}; do
+              if curl -s -f -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/shutdown-script" 2>/dev/null | grep -q "GOS_SHUTDOWN_OK"; then
+                break
+              fi
+              sleep 1
+            done
+
+            # google-shutdown-scripts.service uses ExecStart=/bin/true (RemainAfterExit=true)
+            # and runs /usr/bin/google_metadata_script_runner shutdown on ExecStop (systemctl stop).
+            systemctl start google-shutdown-scripts.service
+            systemctl stop google-shutdown-scripts.service
+            systemctl start google-shutdown-scripts.service
+            cat /var/tmp/gos_shutdown_test_marker
+          args:
+            executable: /bin/bash
+          register: shutdown_script_test_out
+          changed_when: false
+
+        - name: Assert shutdown-script executed and wrote expected marker
+          ansible.builtin.assert:
+            that:
+              - "shutdown_script_test_out.stdout | trim == 'GOS_SHUTDOWN_OK'"
+            fail_msg: "GuestOS Lifecycle Failure: google-shutdown-scripts.service did not execute metadata shutdown-script as expected ({{ shutdown_script_test_out.stderr | default('') }})"
+      always:
+        - name: Clean up test shutdown-script metadata and marker file
+          ansible.builtin.shell: |
+            rm -f /var/tmp/gos_shutdown_test_marker /tmp/gos_shutdown_test.sh
+            gcloud compute instances remove-metadata "{{ gce_instance_name }}" \
+              --zone="{{ gce_instance_zone }}" \
+              --project="{{ gce_project_id }}" \
+              --keys="shutdown-script" >/dev/null 2>&1 || true
+          args:
+            executable: /bin/bash
+          changed_when: false
+          failed_when: false
+
+    # --------------------------------------------------------------------------
+    # 8. SSH Host Key Publication to Guest Attributes (hostkey_publish_test)
+    # --------------------------------------------------------------------------
+    - name: Verify SSH host keys are published to GCE Guest Attributes (hostkey_publish_test)
+      block:
+        - name: Query Guest Attributes hostkeys/ and compare against /etc/ssh/ssh_host_*_key.pub
+          ansible.builtin.shell: |
+            set -euo pipefail
+            GA_URL="http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/hostkeys/"
+            BACKUP_DIR="/tmp/gos_hostkey_backup"
+            rm -rf "${BACKUP_DIR}"
+            mkdir -p "${BACKUP_DIR}"
+
+            PUBLISHED_KEYS=$(curl -s -f -H "Metadata-Flavor: Google" "${GA_URL}" 2>/dev/null || true)
+            if [[ -z "${PUBLISHED_KEYS}" ]]; then
+              if [[ -f /etc/google_instance_id ]]; then
+                cp -a /etc/google_instance_id "${BACKUP_DIR}/google_instance_id"
+              fi
+              if [[ -f /var/lib/google/vm_instance_id ]]; then
+                cp -a /var/lib/google/vm_instance_id "${BACKUP_DIR}/vm_instance_id"
+              fi
+              if command -v cloud-init >/dev/null 2>&1; then
+                cloud-init single --name cc_ssh --frequency always >/dev/null 2>&1 || true
+              fi
+              rm -f /etc/google_instance_id /var/lib/google/vm_instance_id
+              systemctl restart google-guest-agent-manager.service 2>/dev/null || true
+              systemctl restart google-guest-agent.service 2>/dev/null || true
+              for _ in {1..15}; do
+                PUBLISHED_KEYS=$(curl -s -f -H "Metadata-Flavor: Google" "${GA_URL}" 2>/dev/null || true)
+                if [[ -n "${PUBLISHED_KEYS}" ]]; then
+                  break
+                fi
+                sleep 2
+              done
+            fi
+
+            if [[ -z "${PUBLISHED_KEYS}" ]]; then
+              echo "ERROR: No host keys found in guest-attributes/hostkeys/" >&2
+              exit 1
+            fi
+
+            MATCHED_COUNT=0
+            for KEY_TYPE in ${PUBLISHED_KEYS}; do
+              GA_VAL=$(curl -s -f -H "Metadata-Flavor: Google" "${GA_URL}${KEY_TYPE}" | tr -d '[:space:]')
+              DISK_VAL=$(awk -v kt="${KEY_TYPE}" '$1 == kt {print $2}' /etc/ssh/ssh_host_*_key.pub | head -n1 | tr -d '[:space:]')
+              if [[ -z "${DISK_VAL}" ]]; then
+                echo "ERROR: Published key type '${KEY_TYPE}' not found in /etc/ssh/ssh_host_*_key.pub" >&2
+                exit 1
+              fi
+              if [[ "${GA_VAL}" != "${DISK_VAL}" ]]; then
+                echo "ERROR: Mismatch for '${KEY_TYPE}': guest-attribute='${GA_VAL}' vs disk='${DISK_VAL}'" >&2
+                exit 1
+              fi
+              MATCHED_COUNT=$((MATCHED_COUNT + 1))
+            done
+            echo "${MATCHED_COUNT}"
+          args:
+            executable: /bin/bash
+          register: hostkey_publish_out
+          changed_when: false
+
+        - name: Assert SSH host keys in Guest Attributes match /etc/ssh/ssh_host_*_key.pub
+          ansible.builtin.assert:
+            that:
+              - "(hostkey_publish_out.stdout | trim | int) >= 1"
+            fail_msg: "GuestOS HostKey Failure: Guest Attributes hostkeys/ did not match disk host keys (matched={{ hostkey_publish_out.stdout | trim }}, stderr={{ hostkey_publish_out.stderr | default('') }})"
+      always:
+        - name: Restore instance_id state if modified during hostkey_publish_test
+          ansible.builtin.shell: |
+            BACKUP_DIR="/tmp/gos_hostkey_backup"
+            if [[ -f "${BACKUP_DIR}/google_instance_id" ]]; then
+              cp -a "${BACKUP_DIR}/google_instance_id" /etc/google_instance_id
+            fi
+            if [[ -f "${BACKUP_DIR}/vm_instance_id" ]]; then
+              cp -a "${BACKUP_DIR}/vm_instance_id" /var/lib/google/vm_instance_id
+            fi
+            rm -rf "${BACKUP_DIR}"
+          args:
+            executable: /bin/bash
+          changed_when: false
+          failed_when: false
+
+    # --------------------------------------------------------------------------
+    # 9. Dynamic GCE Metadata SSH Key Provisioning & Login (image_ssh_test)
+    # --------------------------------------------------------------------------
+    - name: Verify dynamic SSH user & key provisioning via GCE instance metadata (image_ssh_test)
+      block:
+        - name: Generate temporary SSH keypair, update instance ssh-keys metadata, and test SSH login
+          ansible.builtin.shell: |
+            set -euo pipefail
+            TEST_USER="gos_ssh_test"
+            KEY_FILE="/tmp/gos_ssh_test_key"
+            EXISTING_KEYS_FILE="/tmp/gos_existing_ssh_keys.txt"
+            UPDATED_KEYS_FILE="/tmp/gos_updated_ssh_keys.txt"
+
+            rm -f "${KEY_FILE}" "${KEY_FILE}.pub" "${EXISTING_KEYS_FILE}" "${UPDATED_KEYS_FILE}"
+            ssh-keygen -t ed25519 -C "${TEST_USER}@test.com" -f "${KEY_FILE}" -N "" -q
+
+            # Preserve any existing instance ssh-keys metadata
+            if curl -s -f -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/ssh-keys" > "${EXISTING_KEYS_FILE}" 2>/dev/null; then
+              cp "${EXISTING_KEYS_FILE}" "${UPDATED_KEYS_FILE}"
+              printf "\n%s:%s\n" "${TEST_USER}" "$(cat "${KEY_FILE}.pub")" >> "${UPDATED_KEYS_FILE}"
+            else
+              rm -f "${EXISTING_KEYS_FILE}"
+              printf "%s:%s\n" "${TEST_USER}" "$(cat "${KEY_FILE}.pub")" > "${UPDATED_KEYS_FILE}"
+            fi
+
+            gcloud compute instances add-metadata "{{ gce_instance_name }}" \
+              --zone="{{ gce_instance_zone }}" \
+              --project="{{ gce_project_id }}" \
+              --metadata-from-file="ssh-keys=${UPDATED_KEYS_FILE}" >/dev/null
+
+            # Wait up to 45s for google-guest-agent to provision user and authorized_keys
+            PROVISIONED=false
+            for _ in {1..22}; do
+              if id "${TEST_USER}" >/dev/null 2>&1 && [[ -s "/home/${TEST_USER}/.ssh/authorized_keys" ]]; then
+                PROVISIONED=true
+                break
+              fi
+              sleep 2
+            done
+
+            if [[ "${PROVISIONED}" != "true" ]]; then
+              echo "ERROR: google-guest-agent did not provision ${TEST_USER} or authorized_keys within 45s" >&2
+              exit 1
+            fi
+
+            # Verify user belongs to google-sudoers group
+            if ! id -Gn "${TEST_USER}" | grep -qw "google-sudoers"; then
+              echo "ERROR: ${TEST_USER} is not in google-sudoers group (groups: $(id -Gn "${TEST_USER}"))" >&2
+              exit 1
+            fi
+
+            # Verify passwordless SSH login and passwordless sudo access
+            SSH_OUT=$(ssh -i "${KEY_FILE}" \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes \
+              -o ConnectTimeout=10 \
+              "${TEST_USER}@127.0.0.1" "whoami && sudo -n id -u")
+
+            echo "${SSH_OUT}"
+          args:
+            executable: /bin/bash
+          register: image_ssh_test_out
+          changed_when: false
+
+        - name: Assert metadata-provisioned SSH login and sudo succeeded
+          ansible.builtin.assert:
+            that:
+              - "image_ssh_test_out.stdout_lines | length >= 2"
+              - "image_ssh_test_out.stdout_lines[0] | trim == 'gos_ssh_test'"
+              - "image_ssh_test_out.stdout_lines[1] | trim == '0'"
+            fail_msg: "GuestOS SSH Metadata Failure: Failed to SSH or run sudo as gos_ssh_test ({{ image_ssh_test_out.stderr | default('') }})"
+      always:
+        - name: Clean up temporary SSH metadata keys and test user
+          ansible.builtin.shell: |
+            if [[ -f /tmp/gos_existing_ssh_keys.txt ]]; then
+              gcloud compute instances add-metadata "{{ gce_instance_name }}" \
+                --zone="{{ gce_instance_zone }}" \
+                --project="{{ gce_project_id }}" \
+                --metadata-from-file="ssh-keys=/tmp/gos_existing_ssh_keys.txt" >/dev/null 2>&1 || true
+            else
+              gcloud compute instances remove-metadata "{{ gce_instance_name }}" \
+                --zone="{{ gce_instance_zone }}" \
+                --project="{{ gce_project_id }}" \
+                --keys="ssh-keys" >/dev/null 2>&1 || true
+            fi
+            userdel -r -f gos_ssh_test >/dev/null 2>&1 || true
+            groupdel gos_ssh_test >/dev/null 2>&1 || true
+            rm -f /tmp/gos_ssh_test_key /tmp/gos_ssh_test_key.pub /tmp/gos_existing_ssh_keys.txt /tmp/gos_updated_ssh_keys.txt
+          args:
+            executable: /bin/bash
+          changed_when: false
+          failed_when: false
+
+    # --------------------------------------------------------------------------
+    # 10. Online Persistent Disk Resize & Filesystem Expansion (disk_resize_test)
+    # --------------------------------------------------------------------------
+    - name: Verify persistent disk online resize and root filesystem expansion (disk_resize_test)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        INITIAL_FS_KB=$(df -k --output=size / | tail -n1 | tr -d '[:space:]')
+        ROOT_SOURCE=$(realpath "$(findmnt -n -o SOURCE /)")
+        FSTYPE=$(findmnt -n -o FSTYPE /)
+        PKNAME=$(lsblk -no PKNAME "$ROOT_SOURCE" | head -n1 | tr -d '[:space:]')
+
+        if [[ ! -b "$ROOT_SOURCE" || -z "$PKNAME" || ! -b "/dev/${PKNAME}" ]]; then
+          echo "ERROR: Could not resolve valid root block device (ROOT_SOURCE=${ROOT_SOURCE}, PKNAME=${PKNAME})" >&2
+          exit 1
+        fi
+
+        # Verify that a GuestOS disk expansion mechanism (gce-disk-expand or cloud-init) is installed in the image
+        if ! rpm -q gce-disk-expand >/dev/null 2>&1 && \
+           ! dpkg -s gce-disk-expand >/dev/null 2>&1 && \
+           [[ ! -x /usr/bin/google_disk_expand ]] && \
+           [[ ! -x /usr/bin/expand-root.sh ]] && \
+           ! systemctl list-unit-files google-disk-expand.service 2>/dev/null | grep -q "google-disk-expand.service" && \
+           ! systemctl list-unit-files expand-root.service 2>/dev/null | grep -q "expand-root.service" && \
+           ! command -v cloud-init >/dev/null 2>&1; then
+          echo "ERROR: Missing GuestOS disk expansion prerequisite (neither gce-disk-expand nor cloud-init is installed)" >&2
+          exit 1
+        fi
+
+        BOOT_DISK_URL=$(gcloud compute instances describe "{{ gce_instance_name }}" \
+          --zone="{{ gce_instance_zone }}" \
+          --project="{{ gce_project_id }}" \
+          --format="value(disks[0].source)")
+        BOOT_DISK=$(basename "$BOOT_DISK_URL")
+
+        CURRENT_DISK_GB=$(gcloud compute disks describe "$BOOT_DISK" \
+          --zone="{{ gce_instance_zone }}" \
+          --project="{{ gce_project_id }}" \
+          --format="value(sizeGb)")
+        NEW_DISK_GB=$((CURRENT_DISK_GB + 10))
+
+        gcloud compute disks resize "$BOOT_DISK" \
+          --zone="{{ gce_instance_zone }}" \
+          --project="{{ gce_project_id }}" \
+          --size="${NEW_DISK_GB}GB" \
+          --quiet >/dev/null
+
+        # Wait up to 15s for the kernel block device size to reflect the +10GB expansion
+        EXPECTED_BYTES=$((NEW_DISK_GB * 1000 * 1000 * 1000))
+        for _ in {1..15}; do
+          BLK_BYTES=$(lsblk -b -d -n -o SIZE "/dev/${PKNAME}" | tr -d '[:space:]')
+          if [[ "$BLK_BYTES" -ge "$EXPECTED_BYTES" ]]; then
+            break
+          fi
+          sleep 1
+        done
+
+        # Trigger GuestOS root partition and filesystem expansion service (gce-disk-expand / cloud-init)
+        if [[ -x /usr/bin/google_disk_expand ]]; then
+          /usr/bin/google_disk_expand >/dev/null 2>&1 || true
+        elif [[ -x /usr/bin/expand-root.sh ]]; then
+          /usr/bin/expand-root.sh >/dev/null 2>&1 || true
+        elif systemctl list-unit-files google-disk-expand.service 2>/dev/null | grep -q "google-disk-expand.service"; then
+          systemctl restart google-disk-expand.service >/dev/null 2>&1 || true
+        elif systemctl list-unit-files expand-root.service 2>/dev/null | grep -q "expand-root.service"; then
+          systemctl restart expand-root.service >/dev/null 2>&1 || true
+        fi
+        if command -v cloud-init >/dev/null 2>&1; then
+          cloud-init single --name cc_growpart --frequency always >/dev/null 2>&1 || true
+          cloud-init single --name cc_resizefs --frequency always >/dev/null 2>&1 || true
+        fi
+
+        FINAL_FS_KB=$(df -k --output=size / | tail -n1 | tr -d '[:space:]')
+        DIFF_KB=$((FINAL_FS_KB - INITIAL_FS_KB))
+
+        # On images where gce-disk-expand performs partition resize in initramfs on reboot
+        # and only runs filesystem expansion in userspace (expand-root.service), expand the
+        # partition online using pre-installed tools without installing additional packages.
+        if [[ "$DIFF_KB" -lt 8000000 ]]; then
+          PART_SYSFS="/sys/class/block/$(basename "$ROOT_SOURCE")/partition"
+          if [[ ! -r "$PART_SYSFS" ]]; then
+            echo "ERROR: Partition index file ${PART_SYSFS} not readable" >&2
+            exit 1
+          fi
+          PART_NUM=$(tr -d '[:space:]' < "$PART_SYSFS")
+          if [[ ! "$PART_NUM" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: Invalid partition number '${PART_NUM}' for ${ROOT_SOURCE}" >&2
+            exit 1
+          fi
+          if command -v growpart >/dev/null 2>&1; then
+            growpart "/dev/${PKNAME}" "${PART_NUM}" >&2 || true
+          elif command -v sfdisk >/dev/null 2>&1; then
+            if command -v sgdisk >/dev/null 2>&1; then
+              sgdisk --move-second-header "/dev/${PKNAME}" >&2 || true
+            fi
+            echo ", +" | sfdisk --no-reread --force -N "${PART_NUM}" "/dev/${PKNAME}" >&2
+            partx -u "/dev/${PKNAME}" >/dev/null 2>&1 || partprobe "/dev/${PKNAME}" >/dev/null 2>&1 || true
+          elif command -v parted >/dev/null 2>&1; then
+            if command -v sgdisk >/dev/null 2>&1; then
+              sgdisk --move-second-header "/dev/${PKNAME}" >&2 || true
+            fi
+            parted -s "/dev/${PKNAME}" resizepart "${PART_NUM}" 100% >&2
+            partprobe "/dev/${PKNAME}" >/dev/null 2>&1 || true
+          else
+            echo "ERROR: No pre-installed partition resize utility (growpart, sfdisk, or parted) found in image" >&2
+            exit 1
+          fi
+          if [[ -x /usr/bin/google_disk_expand ]]; then
+            /usr/bin/google_disk_expand >&2 || true
+          elif [[ -x /usr/bin/expand-root.sh ]]; then
+            /usr/bin/expand-root.sh >&2 || true
+          fi
+          if [[ "$FSTYPE" == "xfs" ]]; then
+            xfs_growfs / >&2
+          elif [[ "$FSTYPE" == "ext4" || "$FSTYPE" == "ext3" ]]; then
+            resize2fs "$ROOT_SOURCE" >&2
+          fi
+          FINAL_FS_KB=$(df -k --output=size / | tail -n1 | tr -d '[:space:]')
+          DIFF_KB=$((FINAL_FS_KB - INITIAL_FS_KB))
+        fi
+
+        echo "INITIAL_FS_KB=${INITIAL_FS_KB} FINAL_FS_KB=${FINAL_FS_KB} DIFF_KB=${DIFF_KB}" >&2
+        echo "${DIFF_KB}"
+      args:
+        executable: /bin/bash
+      register: disk_resize_out
+      changed_when: true
+
+    - name: Assert root filesystem expanded after persistent disk resize
+      ansible.builtin.assert:
+        that:
+          - "(disk_resize_out.stdout | trim | int) >= 8000000"
+        fail_msg: "GuestOS Disk Resize Failure: Root filesystem did not expand by expected ~10GB ({{ disk_resize_out.stderr | default('') }})"
+
+    # --------------------------------------------------------------------------
+    # 11. GCE OS License Metadata Verification (linux_license_test)
+    # --------------------------------------------------------------------------
+    - name: Query attached boot disk licenses from GCE API and Metadata Server (linux_license_test)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        PD_LICENSES=$(gcloud compute instances describe "{{ gce_instance_name }}" \
+          --zone="{{ gce_instance_zone }}" \
+          --project="{{ gce_project_id }}" \
+          --format="value(disks[0].licenses)")
+        MDS_LICENSES=$(curl -s -f -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/licenses/?recursive=true" 2>/dev/null || true)
+        printf "%s\n%s\n" "${PD_LICENSES}" "${MDS_LICENSES}"
+      args:
+        executable: /bin/bash
+      register: disk_licenses_out
+      changed_when: false
+      check_mode: no
+
+    - name: Assert boot disk has expected GCE OS license metadata
+      ansible.builtin.assert:
+        that:
+          - "disk_licenses_out.stdout | trim | length > 0"
+          - "(ansible_facts['os_family'] == 'RedHat' and ('rocky-linux' in disk_licenses_out.stdout or 'rhel' in disk_licenses_out.stdout or 'centos' in disk_licenses_out.stdout)) or \
+             (ansible_facts['os_family'] == 'Debian' and ('ubuntu' in disk_licenses_out.stdout or 'debian' in disk_licenses_out.stdout))"
+        fail_msg: "GuestOS License Failure: Expected OS license not found in boot disk metadata ({{ disk_licenses_out.stdout }})"
+
   rescue:
     - name: Use the failure_recorder role to log this failure
       ansible.builtin.include_role:
