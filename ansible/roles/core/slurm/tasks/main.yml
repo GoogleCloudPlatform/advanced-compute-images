@@ -179,6 +179,14 @@
         force: false
       when: hw_type == "tpu"
 
+    - name: Re-apply TPU Enroot configuration (overwritten by slurm-gcp build)
+      ansible.builtin.blockinfile:
+        path: /etc/enroot/enroot.conf
+        block: "{{ enroot_tpu_config }}"
+        marker: "# {mark} ANSIBLE MANAGED TPU ENROOT PATHS"
+        create: true
+        mode: '0644'
+      when: hw_type == "tpu"
 
     - name: Shred static Munge key to prevent security exposure in base image
       ansible.builtin.shell: |

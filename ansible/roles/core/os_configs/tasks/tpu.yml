@@ -50,14 +50,11 @@
     mode: "0755"
 
 - name: Configure Enroot
-  ansible.builtin.copy:
-    content: |
-      ENROOT_CONFIG_PATH     ${HOME}/.enroot
-      ENROOT_RUNTIME_PATH    /tmp/${UID}/runtime
-      ENROOT_CACHE_PATH      /tmp/${UID}/cache
-      ENROOT_DATA_PATH       /tmp/${UID}/data
-      ENROOT_TEMP_PATH       /tmp/${UID}/tmp
-    dest: /etc/enroot/enroot.conf
+  ansible.builtin.blockinfile:
+    path: /etc/enroot/enroot.conf
+    block: "{{ enroot_tpu_config }}"
+    marker: "# {mark} ANSIBLE MANAGED TPU ENROOT PATHS"
+    create: true
     mode: '0644'
 
 - name: Copy third party licenses

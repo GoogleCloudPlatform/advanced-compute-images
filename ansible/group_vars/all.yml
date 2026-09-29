@@ -23,3 +23,11 @@ apps_path: /apps
 
 # Toggles kernel update during Packer build
 update_kernel: false
+
+# Shared TPU Enroot Configuration
+enroot_tpu_config: |
+  ENROOT_CONFIG_PATH     ${HOME}/.enroot
+  ENROOT_RUNTIME_PATH    /tmp/${UID}/runtime
+  ENROOT_CACHE_PATH      /tmp/${UID}/cache
+  ENROOT_DATA_PATH       /tmp/${UID}/data
+  ENROOT_TEMP_PATH       /tmp/${UID}/tmp
