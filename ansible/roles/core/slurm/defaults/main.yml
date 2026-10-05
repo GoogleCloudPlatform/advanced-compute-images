@@ -18,7 +18,7 @@ slurm_repo_dest: "/opt/slurm-gcp-repo"
 # Variables to pass to the inner ansible-playbook
 slurm_extra_vars:
   reboot: false
-  install_cuda: true
+  install_cuda: false
   install_gcsfuse: true
   install_lustre: false
   install_managed_lustre: true

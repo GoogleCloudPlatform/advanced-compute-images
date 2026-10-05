@@ -14,6 +14,7 @@
 
 ---
 os_slurm_extra_vars:
+  install_cuda: true
   install_nvidia_repo: true
   # Slurm-GCP >= 6.12.2 (upstream PR #350) uninstalls scl-utils and
   # environment-modules unless these are true. gcc-toolset-* requires

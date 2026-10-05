@@ -14,4 +14,5 @@
 
 ---
 os_slurm_extra_vars:
+  install_cuda: false
   install_nvidia_repo: false

@@ -15,6 +15,7 @@
 tpu_slurm_vars:
   slurm_patch_files:
     - /var/tmp/tpu-2605.patch
+  install_cuda: false
   install_pyxis: true
   install_nvidia_repo: true
   install_gcsfuse_spank: true
