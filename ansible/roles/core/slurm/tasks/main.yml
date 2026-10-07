@@ -95,12 +95,6 @@
       ansible.builtin.set_fact:
         slurm_extra_vars: "{{ slurm_extra_vars | combine(os_slurm_extra_vars | default({})) }}"
 
-    - name: Copy TPU patch
-      ansible.builtin.copy:
-        src: "tpu-2605.patch"
-        dest: "/var/tmp/tpu-2605.patch"
-      when: hw_type == "tpu"
-
     - name: Include TPU specific variables
       ansible.builtin.include_vars:
         file: "tpu.yml"

@@ -13,8 +13,13 @@
 # limitations under the License.
 ---
 tpu_slurm_vars:
+  # Apply the TPU patch that ships with the slurm-gcp checkout
+  # (build_slurm_from_git_ref). slurm-gcp's patch task looks this path up
+  # in its slurm role's files/ directory. It must stay set: slurm-gcp's
+  # playbook.yml sets slurm_patch_files: [] as a play var, which overrides
+  # the role default, so leaving it unset would apply no patch at all.
   slurm_patch_files:
-    - /var/tmp/tpu-2605.patch
+    - patches/tpu-2605.patch
   install_cuda: false
   install_pyxis: true
   install_nvidia_repo: true
