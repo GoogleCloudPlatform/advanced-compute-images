@@ -14,6 +14,7 @@
 
 ---
 nvidia_installation_path: "/usr/local/nvidia"
+cuda_toolkit_version: "13-0"
 install_doca: false
 install_dcgm: false
 dcgm_version: "4.6.1"

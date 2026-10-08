@@ -34,7 +34,7 @@
 # ---------- Install CUDA Toolkit ----------
 - name: Install CUDA Toolkit packages
   ansible.builtin.dnf:
-    name: "cuda-toolkit-{{ cuda_version.split('.')[0] }}"
+    name: "cuda-toolkit-{{ cuda_toolkit_version }}"
     state: present
     exclude:
       - nsight-compute
@@ -73,6 +73,16 @@
   register: nvidia_container_toolkit_install
 
 # ---------- Install NVIDIA Driver Components ----------
+- name: Ensure kernel headers and build tools are installed for DKMS
+  ansible.builtin.dnf:
+    name:
+      - kernel-devel
+      - kernel-headers
+      - gcc
+      - make
+      - dkms
+    state: present
+
 - name: Ensure NVIDIA driver module stream is enabled for proprietary drivers
   ansible.builtin.command: "dnf module enable -y nvidia-driver:{{ nvidia_driver_package_version }}"
   args:
@@ -153,8 +163,7 @@
 # ---------- Install Fabric Manager ----------
 - name: Install NVIDIA Fabric Manager from NVIDIA CUDA repo
   ansible.builtin.dnf:
-    name: "https://developer.download.nvidia.com/compute/cuda/repos/rhel{{ ansible_facts['distribution_major_version'] }}/x86_64/nvidia-fabric-manager-{{ fabric_manager_version
-      }}-1.x86_64.rpm"
+    name: "nvidia-fabricmanager-{{ fabric_manager_version }}"
     state: present
   become: true
 

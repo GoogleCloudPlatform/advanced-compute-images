@@ -29,12 +29,13 @@
 - name: "Install NCCL stack: nccl-gib, libnccl, and libnccl-devel"
   # We install the NCCL stacks (library, development headers, and GIB plugin)
   # with specific versions for image consistency.
-  ansible.builtin.package:
+  # Using wildcards since versions include +cudaXX.Y suffixes in RPM repositories.
+  ansible.builtin.dnf:
     name:
-      - "nccl-gib-{{nccl_gib_version}}"
-      - "libnccl-{{nccl_version}}"
-      - "libnccl-devel-{{nccl_version}}"
-    state: latest
+      - "nccl-gib-{{ nccl_gib_version }}*"
+      - "libnccl-{{ nccl_version }}*"
+      - "libnccl-devel-{{ nccl_version }}*"
+    state: present
     update_cache: true
 
 - name: Ensure NCCL/gIB environment script is configured in /etc/profile.d

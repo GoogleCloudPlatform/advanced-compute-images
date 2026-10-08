@@ -45,7 +45,7 @@ function update_metadata_status() {
   local zone
   zone=$(curl -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/zone" -s | awk -F/ '{print $NF}')
   local name
-  name=$(hostname)
+  name=$(curl -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/name" -s 2>/dev/null || hostname -s)
   gcloud compute instances add-metadata "$name" --zone="$zone" --metadata=startup-script-status="$status" >/dev/null 2>&1 || log_setup "Warning: Failed to update metadata status to '$status'."
 }
 
@@ -78,6 +78,10 @@ function wait_for_dnf_locks() {
 
 # --- Apt Install Ansible ---
 function install_ansible_using_apt(){
+  if [[ -x "${ANSIBLE_VENV_DIR}/bin/ansible-playbook" ]]; then
+    log_setup "Ansible is already installed in ${ANSIBLE_VENV_DIR}. Skipping reinstall."
+    return 0
+  fi
   dpkg --configure -a || true
   apt-get update >> "$DEBUG_LOG" 2>&1 && \
   apt-get install -f -y >> "$DEBUG_LOG" 2>&1 && \
@@ -89,9 +93,13 @@ function install_ansible_using_apt(){
 
 # -- Dnf Install Ansible ---
 function install_ansible_using_dnf(){
+  if [[ -x "${ANSIBLE_VENV_DIR}/bin/ansible-playbook" ]]; then
+    log_setup "Ansible is already installed in ${ANSIBLE_VENV_DIR}. Skipping reinstall."
+    return 0
+  fi
   dnf clean all >> "$DEBUG_LOG" 2>&1 && \
-  dnf makecache --refresh >> "$DEBUG_LOG" 2>&1 && \
-  dnf install -y epel-release python3 python3-pip perl-devel gcc make libffi-devel >> "$DEBUG_LOG" 2>&1 && \
+  dnf makecache --refresh --setopt=*.skip_if_unavailable=true >> "$DEBUG_LOG" 2>&1 && \
+  dnf install -y --setopt=*.skip_if_unavailable=true epel-release python3 python3-pip perl-devel gcc make libffi-devel >> "$DEBUG_LOG" 2>&1 && \
   ${PYTHON_CMD} -m venv "${ANSIBLE_VENV_DIR}" >> "$DEBUG_LOG" 2>&1 && \
   "${ANSIBLE_VENV_DIR}/bin/pip" install --upgrade pip >> "$DEBUG_LOG" 2>&1 && \
   "${ANSIBLE_VENV_DIR}/bin/pip" install "ansible==${ANSIBLE_VERSION}" >> "$DEBUG_LOG" 2>&1

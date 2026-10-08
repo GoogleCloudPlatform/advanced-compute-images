@@ -642,7 +642,7 @@
       ansible.builtin.assert:
         that:
           - "disk_licenses_out.stdout | trim | length > 0"
-          - "(ansible_facts['os_family'] == 'RedHat' and ('rocky-linux' in disk_licenses_out.stdout or 'rhel' in disk_licenses_out.stdout or 'centos' in disk_licenses_out.stdout)) or \
+          - "(ansible_facts['os_family'] == 'RedHat' and ('rocky' in disk_licenses_out.stdout or 'rl9' in disk_licenses_out.stdout or 'rl8' in disk_licenses_out.stdout or 'rhel' in disk_licenses_out.stdout or 'centos' in disk_licenses_out.stdout)) or \
              (ansible_facts['os_family'] == 'Debian' and ('ubuntu' in disk_licenses_out.stdout or 'debian' in disk_licenses_out.stdout))"
         fail_msg: "GuestOS License Failure: Expected OS license not found in boot disk metadata ({{ disk_licenses_out.stdout }})"
 

@@ -22,6 +22,7 @@ while true; do
   current_time=$(date +%s)
   elapsed=$((current_time - start_time))
   output=$(gcloud compute instances get-serial-port-output $INSTANCE_NAME --zone=$ZONE --project=$PROJECT_ID --port=1 2>/dev/null | tail -n 100)
+  recent_output=$(gcloud compute instances get-serial-port-output $INSTANCE_NAME --zone=$ZONE --project=$PROJECT_ID --port=1 2>/dev/null | tail -n 500)
   if [ $elapsed -gt $timeout ]; then
     echo 'Timeout waiting for startup script!'
     echo 'Dumping full serial log:'
@@ -34,12 +35,12 @@ while true; do
     boot_recorded=true
   fi
 
-  if echo "$output" | grep -q 'PACKER_BUILD_SUCCESS'; then
+  if echo "$recent_output" | grep -q 'PACKER_BUILD_SUCCESS'; then
     echo 'Startup script finished successfully! Fetching full log:'
     echo "$output"
     break
   fi
-  if echo "$output" | grep -q 'PACKER_BUILD_FAILURE'; then
+  if echo "$recent_output" | grep -q 'PACKER_BUILD_FAILURE'; then
     echo 'Startup script FAILED inside the VM:'
     gcloud compute instances get-serial-port-output $INSTANCE_NAME --zone=$ZONE --project=$PROJECT_ID --port=1 2>/dev/null | tail -n 250 || echo "$output"
     exit 1

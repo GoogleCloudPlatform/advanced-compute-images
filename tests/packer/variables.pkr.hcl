@@ -49,6 +49,12 @@ variable "cuda_version" {
   default = ""
 }
 
+variable "cuda_toolkit_version" {
+  type        = string
+  description = "CUDA toolkit package version suffix (e.g. 13-2)."
+  default     = "13-0"
+}
+
 variable "fabric_manager_version" {
   type  = string
   description = "NVIDIA fabric manager version."
@@ -84,12 +90,14 @@ variable "project_id" {
 variable "source_image" {
   type = string
   description = "Source image name for the packer build."
-  default = null
+  default = ""
 }
 
+
 variable "source_image_family" {
-  type = string
+  type        = string
   description = "Source image family for the packer build."
+  default     = ""
 }
 
 variable "source_image_project_id" {
@@ -159,6 +167,18 @@ variable "install_dcgm" {
   type        = bool
   default     = false
   description = "Flag to gate NVIDIA DCGM installation pending legal approval."
+}
+
+variable "apply_os_configs" {
+  type        = bool
+  default     = false
+  description = "Flag to apply OS configs."
+}
+
+variable "ansible_extra_roles" {
+  type        = list(string)
+  description = "Contributed team roles from roles/contrib/ (e.g. ['acme_monitoring'])."
+  default     = []
 }
 
 variable "install_nvidia_stack" {

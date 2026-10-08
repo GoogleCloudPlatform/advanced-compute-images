@@ -28,6 +28,7 @@ locals {
 
   build_date = formatdate("YYYYMMDD", timestamp())
   ansible_dir = "../ansible"
+
   ansible_vars = {
     image_os       = var.image_os
     cpu_arch       = var.cpu_arch
@@ -38,6 +39,7 @@ locals {
     nvidia_driver_package_version = var.nvidia_driver_package_version
     fabricmanager_deb      = var.fabricmanager_deb
     cuda_version   = var.cuda_version
+    cuda_toolkit_version = var.cuda_toolkit_version
     nccl_gib_version= var.nccl_gib_version
     nccl_version            = var.nccl_version
     install_slurm   = local.has_slurm
@@ -80,8 +82,8 @@ source "googlecompute" "image" {
   ssh_username = "ubuntu"
 
   source_image_project_id = [var.project_id]
-  source_image_family     = local.image_family_name
-  source_image            = var.source_image # will default to null and pick latest image from family
+  source_image            = (var.source_image != null && var.source_image != "") ? var.source_image : null
+  source_image_family     = (var.source_image != null && var.source_image != "") ? null : local.image_family_name
 
   # Naming
   instance_name = "packer-tmp-${var.build_id}" # For communicator-less

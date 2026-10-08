@@ -49,6 +49,12 @@ variable "cuda_version" {
   default = ""
 }
 
+variable "cuda_toolkit_version" {
+  type        = string
+  description = "CUDA toolkit package version suffix (e.g. 13-2)."
+  default     = "13-0"
+}
+
 variable "fabric_manager_version" {
   type  = string
   description = "NVIDIA fabric manager version."
@@ -87,9 +93,11 @@ variable "source_image" {
   default     = ""
 }
 
+
 variable "source_image_family" {
-  type = string
+  type        = string
   description = "Source image family for the packer build."
+  default     = ""
 }
 
 variable "source_image_project_id" {
@@ -173,4 +181,10 @@ variable "install_nvidia_stack" {
   type        = bool
   default     = false
   description = "Flag to enable NVIDIA stack installation."
+}
+
+variable "apply_os_configs" {
+  type        = bool
+  default     = false
+  description = "Flag to apply OS configs."
 }

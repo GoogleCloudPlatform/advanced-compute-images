@@ -127,6 +127,47 @@
     changed_when: false
     become: yes
 
+  - name: Verify installed Slurm version matches configuration
+    ansible.builtin.shell: |
+      set -e
+      INSTALLED_SLURM_VERSION=$(sinfo --version | awk '{print $2}')
+      echo "Installed Slurm version: ${INSTALLED_SLURM_VERSION}"
+      if [[ "${INSTALLED_SLURM_VERSION}" != "{{ slurm_version }}"* ]]; then
+        echo "ERROR: Expected Slurm version prefix {{ slurm_version }}, got ${INSTALLED_SLURM_VERSION}"
+        exit 1
+      fi
+    changed_when: false
+    when:
+      - slurm_version is defined
+      - slurm_version | length > 0
+
+  - name: Verify CUDA nvcc compiler on Rocky Slurm builds with CUDA
+    ansible.builtin.command: /usr/local/cuda/bin/nvcc --version
+    register: nvcc_check
+    changed_when: false
+    when:
+      - ansible_facts['os_family'] == "RedHat"
+      - (install_cuda | default(false) | bool) or (install_nvidia_stack | default(false) | bool) or (cuda_runfile_url is defined and cuda_runfile_url | length > 0)
+
+  - name: Verify NVIDIA driver binaries exist on Rocky Slurm builds with CUDA
+    ansible.builtin.stat:
+      path: /usr/bin/nvidia-smi
+    register: nvidia_smi_bin
+    failed_when: not nvidia_smi_bin.stat.exists
+    when:
+      - ansible_facts['os_family'] == "RedHat"
+      - (install_cuda | default(false) | bool) or (install_nvidia_stack | default(false) | bool) or (cuda_runfile_url is defined and cuda_runfile_url | length > 0)
+
+  - name: Verify NVIDIA driver kernel module version on Rocky Slurm builds with CUDA
+    ansible.builtin.shell: |
+      modinfo nvidia | grep -E '^version:\s+595\.'
+    register: nvidia_modinfo
+    changed_when: false
+    failed_when: nvidia_modinfo.rc != 0
+    when:
+      - ansible_facts['os_family'] == "RedHat"
+      - (cuda_runfile_url is defined and (cuda_runfile_url | regex_search('595'))) or (nvidia_driver_package_version is defined and (nvidia_driver_package_version | regex_search('595')))
+
   rescue:
   - name: Use the failure_recorder role to log this failure
     ansible.builtin.include_role:

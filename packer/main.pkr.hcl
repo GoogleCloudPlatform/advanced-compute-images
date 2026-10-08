@@ -37,7 +37,6 @@ locals {
   has_nvidia_stack = var.install_nvidia_stack && !contains(var.ansible_exclude_roles, "nvidia_stack")
   has_lustre       = !contains(var.ansible_exclude_roles, "lustre")
 
-
   ansible_vars = {
     image_os                 = var.image_os
     cpu_arch                 = var.cpu_arch
@@ -48,6 +47,7 @@ locals {
     nvidia_driver_package_version = var.nvidia_driver_package_version
     fabricmanager_deb       = var.fabricmanager_deb
     cuda_version             = var.cuda_version
+    cuda_toolkit_version     = var.cuda_toolkit_version
     nccl_gib_version         = var.nccl_gib_version
     nccl_version             = var.nccl_version
     source_image             = var.source_image

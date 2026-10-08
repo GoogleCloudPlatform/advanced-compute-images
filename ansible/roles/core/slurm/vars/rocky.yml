@@ -14,13 +14,13 @@
 
 ---
 os_slurm_extra_vars:
-  install_cuda: true
-  install_nvidia_repo: true
+  install_cuda: false
+  install_nvidia_repo: false
   # Slurm-GCP >= 6.12.2 (upstream PR #350) uninstalls scl-utils and
-  # environment-modules unless these are true. gcc-toolset-* requires
-  # scl-utils (which in turn requires environment-modules), so removing them
-  # also removes the gcc-toolset compilers installed by the common role.
-  # environment-modules must stay too: its "absent" task runs first and would
-  # take scl-utils and gcc-toolset with it.
+  # environment-modules unless install_scl_utils and install_environment_modules
+  # are explicitly set to true. gcc-toolset-* requires scl-utils (which in turn
+  # requires environment-modules), so removing them also removes the gcc-toolset
+  # compilers installed by the common role. We explicitly set both to true here
+  # to preserve gcc-toolset compilers when install_cuda is false.
   install_scl_utils: true
   install_environment_modules: true
