@@ -141,6 +141,15 @@ source "googlecompute" "image" {
     enable-osconfig         = "FALSE"
     startup-script-status   = "pending"
     startup-script = file("startup-script.sh")
+    # Ubuntu 24.04 base images ship no /etc/hostname. Without one, nodes
+    # boot with no static hostname and take the transient FQDN
+    # (<vm>.<zone>.c.<project>.internal), which can exceed the 64-character
+    # limit and break Slurm. Have cloud-init write /etc/hostname on the
+    # build VM so every image ships one.
+    user-data = <<-EOT
+      #cloud-config
+      create_hostname_file: true
+    EOT
   }
 }
 
