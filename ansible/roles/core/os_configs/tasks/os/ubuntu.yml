@@ -13,6 +13,16 @@
 # limitations under the License.
 
 ---
+- name: Ensure GCP kernel metapackages are installed for TPU images
+  ansible.builtin.apt:
+    name:
+      - linux-image-gcp
+      - linux-headers-gcp
+      - linux-gcp
+    state: present
+  become: true
+  when: hw_type == "tpu"
+
 - name: Hold kernel packages to prevent upgrades
   ansible.builtin.dpkg_selections:
     name: "{{ item }}"
@@ -37,6 +47,7 @@
         name:
           - linux-image-gcp
           - linux-headers-gcp
+          - linux-gcp
         state: latest
       become: true
 
