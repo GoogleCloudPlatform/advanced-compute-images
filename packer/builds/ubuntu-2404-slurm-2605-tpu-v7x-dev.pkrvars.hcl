@@ -31,7 +31,7 @@ machine_type             = "c2-standard-8"
 disk_size                = "50"
 disk_type                = "pd-ssd"
 python_version           = "3.12"
-tpu_version              = "tpu7x"
+tpu_version              = "v7x"
 
 # --- Feature Controls & Customizations ---
 # Add extra contrib roles from roles/contrib/ (e.g. ["acme_monitoring"])
