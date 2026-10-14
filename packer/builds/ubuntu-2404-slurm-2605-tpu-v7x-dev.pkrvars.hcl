@@ -20,7 +20,6 @@ orchestrator             = "slurm"
 hw_type                  = "tpu"
 release_track            = "dev"
 build_number             = "1"
-source_image             = "ubuntu-accel-2404-amd64-tpu-tpu7x-v20260626"
 # Required by packer/variables.pkr.hcl; ignored while source_image is set.
 source_image_family      = "ubuntu-accel-2404-amd64-tpu-tpu7x"
 source_image_project_id  = "ubuntu-os-accelerator-images"
