@@ -18,6 +18,7 @@ image_os                 = "ubuntu2204"
 cpu_arch                 = "x86_64"
 orchestrator             = "slurm"
 hw_type                  = "gpu"
+install_nvidia_stack     = true
 release_track            = "dev"
 build_number             = "1"
 source_image_family      = "ubuntu-2204-lts"

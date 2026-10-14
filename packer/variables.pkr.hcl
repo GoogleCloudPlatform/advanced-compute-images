@@ -168,3 +168,9 @@ variable "custom_image_name" {
   description = "Custom image name prefix. The final image name will still have a version suffix (e.g. -vYYYYMMDD) appended. If not provided, the prefix will be auto-generated."
   default     = ""
 }
+
+variable "install_nvidia_stack" {
+  type        = bool
+  default     = false
+  description = "Flag to enable NVIDIA stack installation."
+}

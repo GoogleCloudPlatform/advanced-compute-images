@@ -34,7 +34,7 @@ locals {
   _validate_image_name = length(var.ansible_extra_roles) > 0 && var.custom_image_name == "" ? file("ERROR: custom_image_name MUST be provided when ansible_extra_roles is non-empty") : null
 
   has_slurm        = var.orchestrator == "slurm" && !contains(var.ansible_exclude_roles, "slurm")
-  has_nvidia_stack = var.hw_type == "gpu" && !contains(var.ansible_exclude_roles, "nvidia_stack")
+  has_nvidia_stack = var.install_nvidia_stack && !contains(var.ansible_exclude_roles, "nvidia_stack")
   has_lustre       = !contains(var.ansible_exclude_roles, "lustre")
 
 
@@ -75,8 +75,8 @@ locals {
     var.tpu_version,
     replace(replace(var.image_os, "ubuntu", "u"), "rocky", "rocky-linux-"),
     local.has_slurm ? "slurm-${join("", slice(split(".", var.slurm_version), 0, 2))}" : null,
-    local.has_nvidia_stack ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
-    local.has_nvidia_stack ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
+    var.hw_type == "gpu" ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
+    var.hw_type == "gpu" ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
     var.cpu_arch == "x86_64" ? "amd64" : (var.cpu_arch == "arm64" ? "arm64" : replace(var.cpu_arch, "_", "-")),
     var.release_track == "nightly" ? var.release_track : null
   ])
@@ -87,8 +87,8 @@ locals {
     var.tpu_version,
     replace(replace(var.image_os, "ubuntu", "u"), "rocky", "rocky-linux-"),
     local.has_slurm ? "slurm-${join("", slice(split(".", var.slurm_version), 0, 2))}" : null,
-    local.has_nvidia_stack ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
-    local.has_nvidia_stack ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
+    var.hw_type == "gpu" ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
+    var.hw_type == "gpu" ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
     var.cpu_arch == "x86_64" ? "amd64" : (var.cpu_arch == "arm64" ? "arm64" : replace(var.cpu_arch, "_", "-")),
   ])
   image_name_val = local._validate_image_name == null ? (var.custom_image_name != "" ? var.custom_image_name : join("-", local.image_name_parts)) : null

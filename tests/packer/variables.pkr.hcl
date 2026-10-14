@@ -160,3 +160,9 @@ variable "install_dcgm" {
   default     = false
   description = "Flag to gate NVIDIA DCGM installation pending legal approval."
 }
+
+variable "install_nvidia_stack" {
+  type        = bool
+  default     = false
+  description = "Flag to enable NVIDIA stack installation."
+}

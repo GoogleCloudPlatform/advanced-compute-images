@@ -18,6 +18,7 @@ image_os                = "ubuntu2404"
 cpu_arch                = "arm64"
 orchestrator            = "slurm"
 hw_type                 = "gpu"
+install_nvidia_stack    = true
 release_track           = "dev"
 build_number            = "1"
 source_image_family     = "ubuntu-2404-lts-arm64"

@@ -23,8 +23,8 @@ packer {
 }
 
 locals {
-  has_slurm = var.orchestrator == "slurm" && !contains(var.ansible_exclude_roles, "slurm")
-  has_nvidia_stack = var.hw_type == "gpu" && !contains(var.ansible_exclude_roles, "nvidia_stack")
+  has_slurm        = var.orchestrator == "slurm" && !contains(var.ansible_exclude_roles, "slurm")
+  has_nvidia_stack = var.install_nvidia_stack && !contains(var.ansible_exclude_roles, "nvidia_stack")
 
   build_date = formatdate("YYYYMMDD", timestamp())
   ansible_dir = "../ansible"
@@ -54,8 +54,8 @@ locals {
     var.tpu_version,
     replace(replace(var.image_os, "ubuntu", "u"), "rocky", "rocky-linux-"),
     local.has_slurm ? "slurm-${join("", slice(split(".", var.slurm_version), 0, 2))}" : null,
-    local.has_nvidia_stack ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
-    local.has_nvidia_stack ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
+    var.hw_type == "gpu" ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
+    var.hw_type == "gpu" ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
     var.cpu_arch == "x86_64" ? "amd64" : (var.cpu_arch == "arm64" ? "arm64" : replace(var.cpu_arch, "_", "-")),
     var.release_track == "nightly" ? var.release_track : null
   ])
@@ -65,8 +65,8 @@ locals {
     var.hw_type,
     replace(replace(var.image_os, "ubuntu", "u"), "rocky", "rocky-linux-"),
     local.has_slurm ? "slurm-${join("", slice(split(".", var.slurm_version), 0, 2))}" : null,
-    local.has_nvidia_stack ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
-    local.has_nvidia_stack ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
+    var.hw_type == "gpu" ? "cuda-${join("", slice(split(".", var.cuda_version), 0, 2))}" : null,
+    var.hw_type == "gpu" ? "nvidia-${split(".", var.fabric_manager_version)[0]}" : null,
     var.cpu_arch == "x86_64" ? "amd64" : (var.cpu_arch == "arm64" ? "arm64" : replace(var.cpu_arch, "_", "-")),
   ])
   image_name_val = join("-", local.image_name_parts)
