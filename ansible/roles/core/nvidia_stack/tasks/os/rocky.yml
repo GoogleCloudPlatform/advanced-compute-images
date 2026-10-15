@@ -129,9 +129,10 @@
     content: |
       #!/bin/bash
       set -e
-      # Enable and start services. Enable ensures they start on subsequent reboots.
-      systemctl enable nvidia-persistenced.service
-      systemctl start nvidia-persistenced.service
+      # Only start nvidia-persistenced if NVIDIA GPUs are present
+      if lspci | grep -qi nvidia || [ -e /dev/nvidiactl ]; then
+        systemctl start nvidia-persistenced.service
+      fi
   become: true
 
 - name: Create systemd service for nvidia startup script
