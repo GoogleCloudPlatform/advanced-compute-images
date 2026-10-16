@@ -92,15 +92,23 @@
         state: present
       when: hw_type == "gpu" and not install_slurm
 
+    # GPU workload tests are skipped on ARM: arm64 test VMs have no GPUs attached
+    # (see machine_type/accelerator_count in tests/packer/main.pkr.hcl).
     - name: Run Transformer Test
       ansible.builtin.include_role:
         name: nemo-tests
-      when: hw_type == "gpu" and not install_slurm
+      when:
+        - hw_type == "gpu"
+        - not install_slurm
+        - ansible_facts['architecture'] != "aarch64"
 
     - name: Run NCCL Test
       ansible.builtin.include_role:
         name: nccl-tests
-      when: hw_type == "gpu" and not install_slurm
+      when:
+        - hw_type == "gpu"
+        - not install_slurm
+        - ansible_facts['architecture'] != "aarch64"
 
     - name: Dump collected failed task results
       ansible.builtin.debug:
