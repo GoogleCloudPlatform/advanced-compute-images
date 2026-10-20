@@ -165,6 +165,12 @@ log_setup "Ansible finished in $((ANSIBLE_END_TIME - ANSIBLE_START_TIME)) second
 function run_cleanup() {
   log_setup "--- Running Final Cleanup Script ---"
   local build_user="packer"
+  # Remove virtual environment build artifact
+  if [[ -d "${ANSIBLE_VENV_DIR}" ]]; then
+    log_setup "Removing virtual environment ${ANSIBLE_VENV_DIR}..."
+    rm -rf "${ANSIBLE_VENV_DIR}"
+    rm -f /usr/bin/ansible /usr/bin/ansible-playbook /usr/bin/ansible-galaxy
+  fi
   # Truncate major logs
   truncate -s 0 /var/log/syslog
   truncate -s 0 /var/log/auth.log

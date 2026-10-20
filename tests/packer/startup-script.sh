@@ -22,16 +22,18 @@ echo "The OS ID is: ${OS_ID} (${OS_VERSION_ID})"
 
 # Version Pinning & Path Configurations
 if [[ "${OS_ID}" == "rocky" && "${OS_VERSION_ID}" == "8" ]]; then
-  # TODO: Add comments explaining the complexity of why Rocky 8 needs Ansible 4.10.0
+  # Rocky 8 uses Python 3.6 as system python, requiring Ansible 4.10.0 pinned to python3.6
   ANSIBLE_VERSION="4.10.0"
+  PYTHON_CMD="python3.6"
 elif [[ "${OS_ID}" == "ubuntu" && "${OS_VERSION_ID}" == "24" ]]; then
   ANSIBLE_VERSION="10.3.0"
+  PYTHON_CMD="python3"
 else
   ANSIBLE_VERSION="8.7.0"
+  PYTHON_CMD="python3"
 fi
 echo "Pinned Ansible version: ${ANSIBLE_VERSION}"
 ANSIBLE_VENV_DIR="${ANSIBLE_VENV_DIR:-/opt/ansible-venv}"
-PYTHON_CMD="python3"
 
 # Helper function to print clean, tagged logs to the console AND main log file
 function log_setup() {
