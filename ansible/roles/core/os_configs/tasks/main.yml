@@ -19,7 +19,7 @@
     content: |
       * - memlock unlimited
       * - nproc unlimited
-      * - stack 8192
+      * - stack {{ 'unlimited' if (ansible_facts['os_family'] == 'RedHat' and (install_slurm | default(false) | bool) and ansible_facts['architecture'] == 'x86_64') else 8192 }}
       * - nofile 1048576
       * - cpu unlimited
       * - rtprio unlimited

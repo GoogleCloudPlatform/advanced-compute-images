@@ -92,6 +92,28 @@
       msg: "No compilers found by Spack."
     when: "'No compilers' in spack_compiler_list.stdout"
 
+  - name: "Spack | Test | Verify GCC {{ spack_gcc_version }} installation and registration"
+    when:
+      - ansible_facts['os_family'] == 'RedHat'
+      - install_slurm | default(false) | bool
+      - ansible_facts['architecture'] == 'x86_64'
+    block:
+      - name: "Spack | Test | Check if gcc@{{ spack_gcc_version }} is installed in Spack"
+        become: true
+        become_user: "{{ hpc_user }}"
+        ansible.builtin.shell:
+          cmd: |
+            . {{ spack_root }}/share/spack/setup-env.sh
+            spack find "gcc@{{ spack_gcc_version }}"
+          executable: /bin/bash
+        changed_when: false
+
+      - name: "Spack | Test | Verify spack compiler list contains gcc@{{ spack_gcc_version }}"
+        ansible.builtin.assert:
+          that:
+            - "('gcc@' ~ spack_gcc_version) in spack_compiler_list.stdout"
+          fail_msg: "Expected gcc@{{ spack_gcc_version }} in spack compiler list, got: {{ spack_compiler_list.stdout }}"
+
   rescue:
   - name: Use the failure_recorder role to log this failure
     ansible.builtin.include_role:

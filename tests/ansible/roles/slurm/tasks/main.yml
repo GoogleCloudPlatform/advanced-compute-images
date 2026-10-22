@@ -106,6 +106,20 @@
       fi
     changed_when: false
 
+  - name: Verify GCSFuse SPANK plugin shared object exists
+    ansible.builtin.stat:
+      path: /usr/local/lib/slurm/gcsfuse_spank.so
+    register: gcsfuse_spank_so
+
+  - name: Fail if GCSFuse SPANK plugin shared object is missing
+    ansible.builtin.fail:
+      msg: "ERROR: /usr/local/lib/slurm/gcsfuse_spank.so not found."
+    when: not gcsfuse_spank_so.stat.exists
+
+  - name: Verify plugstack.conf registers gcsfuse_spank.so
+    ansible.builtin.command: grep -q "gcsfuse_spank.so" /etc/slurm/plugstack.conf
+    changed_when: false
+
   - name: Test Slurm Functionality with sinfo
     ansible.builtin.shell: |
       set -e

@@ -83,6 +83,20 @@
           - "(ulimit_nofile_out.stdout | trim | int) >= 65536 or ulimit_nofile_out.stdout | trim == 'unlimited'"
         fail_msg: "HPC Tuning Failure: PAM session ulimit -n is '{{ ulimit_nofile_out.stdout | trim }}', expected >= 65536"
 
+    - name: Verify in-guest PAM session stack limit
+      ansible.builtin.shell: "su -s /bin/bash -c 'ulimit -s' root"
+      register: ulimit_stack_out
+      changed_when: false
+      check_mode: no
+
+    - name: Assert stack ulimit matches architecture expectation in user session
+      ansible.builtin.assert:
+        that:
+          - "ulimit_stack_out.stdout | trim == ('unlimited' if (ansible_facts['os_family'] == 'RedHat' and (install_slurm | default(false) | bool) and ansible_facts['architecture'] == 'x86_64') else '8192')"
+        fail_msg: >-
+          HPC Tuning Failure: PAM session ulimit -s is '{{ ulimit_stack_out.stdout | trim }}',
+          expected '{{ 'unlimited' if (ansible_facts['os_family'] == 'RedHat' and (install_slurm | default(false) | bool) and ansible_facts['architecture'] == 'x86_64') else '8192' }}'
+
     # --------------------------------------------------------------------------
     # 2. Firewall and Security Subsystem Tuning (tunings_applied_common_test)
     # --------------------------------------------------------------------------

@@ -45,6 +45,17 @@
         fail_msg: "Manifest content validation failed. Missing key entries."
       when: manifest_dest_stat.stat.exists
 
+    - name: Verify Spack GCC version entry in manifest on Rocky Slurm x86_64
+      ansible.builtin.assert:
+        that:
+          - "('gcc=\"' ~ spack_gcc_version ~ '\"') in manifest_text"
+        fail_msg: "Manifest validation failed: expected gcc=\"{{ spack_gcc_version }}\" in manifest."
+      when:
+        - manifest_dest_stat.stat.exists
+        - ansible_facts['os_family'] == 'RedHat'
+        - install_slurm | default(false) | bool
+        - ansible_facts['architecture'] == 'x86_64'
+
   rescue:
     - name: Use the failure_recorder role to log this failure
       ansible.builtin.include_role:

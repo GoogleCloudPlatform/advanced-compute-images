@@ -65,6 +65,31 @@
     loop_var: cron_conf_file
   failed_when: false
 
+- name: Disable dnf-automatic auto-updates
+  when:
+    - ansible_facts['os_family'] == "RedHat"
+    - install_slurm | default(false) | bool
+  block:
+    - name: Disable dnf-automatic timers
+      ansible.builtin.systemd:
+        name: "{{ dnf_auto_timer }}"
+        state: stopped
+        enabled: false
+      loop:
+        - dnf-automatic.timer
+        - dnf-automatic-install.timer
+        - dnf-automatic-download.timer
+      loop_control:
+        loop_var: dnf_auto_timer
+      failed_when: false
+
+    - name: Disable apply_updates in /etc/dnf/automatic.conf
+      ansible.builtin.lineinfile:
+        path: /etc/dnf/automatic.conf
+        regexp: "^\\s*apply_updates\\s*="
+        line: "apply_updates = no"
+      failed_when: false
+
 - name: Check for man-db-cache-update.service
   ansible.builtin.stat:
     path: /lib/systemd/system/man-db-cache-update.service

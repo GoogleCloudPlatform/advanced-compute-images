@@ -484,6 +484,36 @@
         manifest_lines: |
           {{ manifest_lines }}spack="{{ (spack_version_out | default({})).stdout | default('Not Found') | trim }}"
 
+- name: Collect Spack GCC Version
+  when:
+    - ansible_facts['os_family'] == 'RedHat'
+    - install_slurm | default(false) | bool
+    - ansible_facts['architecture'] == 'x86_64'
+  block:
+    - name: Get GCC Version from Spack
+      ansible.builtin.shell: |
+        set -o pipefail
+        if [ -f /etc/profile.d/01-spack.sh ]; then
+          . /etc/profile.d/01-spack.sh
+        elif [ -f "{{ spack_root }}/share/spack/setup-env.sh" ]; then
+          . "{{ spack_root }}/share/spack/setup-env.sh"
+        fi
+        if command -v spack > /dev/null 2>&1; then
+          spack find --format "{version}" "gcc@{{ spack_gcc_version }}" 2>/dev/null | head -n 1 || echo "Not Found"
+        else
+          echo "Not Found"
+        fi
+      args:
+        executable: /bin/bash
+      register: spack_gcc_version_out
+      changed_when: false
+      failed_when: false
+
+    - name: Add Spack GCC to Manifest
+      ansible.builtin.set_fact:
+        manifest_lines: |
+          {{ manifest_lines }}gcc="{{ (spack_gcc_version_out | default({})).stdout | default('Not Found') | trim }}"
+
 - name: Collect NFS Version
   when: not install_slurm | default(false)
   block:

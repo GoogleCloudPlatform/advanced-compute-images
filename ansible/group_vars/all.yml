@@ -17,6 +17,10 @@ hpc_user: "{{ 'ubuntu' if ansible_facts['os_family'] == 'Debian' else 'rocky' }}
 spack_root: /opt/apps/spack
 spack_cache_url: gs://ai-hpc-images-spack-cache
 spack_release_version: 1-1
+spack_os_cache_url: "{{ spack_cache_url }}-v{{ spack_release_version }}/{{ ansible_facts['distribution'] | lower }}-{{ ansible_facts['distribution_major_version'] }}"
+spack_gcc_version: "14.3.0"
+spack_gpg_name: "ACI"
+spack_gpg_email: "aci@example.com"
 
 # Where you want your symlinks (views) to live
 apps_path: /apps

@@ -33,18 +33,6 @@
   register: lmod_install
   changed_when: "'installed' in lmod_install.stdout"
 
-- name: Create Spack GPG Key for Signing
-  become: true
-  become_user: "{{ hpc_user }}"
-  ansible.builtin.shell: |
-    {{ spack_init }}
-    # Only create if no private keys exist
-    if [ $(spack gpg list --private | wc -l) -eq 0 ]; then
-      spack gpg create "{{ spack_gpg_name | default('HPC Admin') }}" "{{ spack_gpg_email | default('admin@example.com') }}"
-    fi
-  args:
-    executable: /bin/bash
-
 # -----------------------------------------------------------------
 #  Push Lmod to Cache (Save for next time)
 # -----------------------------------------------------------------

@@ -47,6 +47,38 @@
       - ansible_facts['os_family'] == "Debian"
       - unattended_status is failed
 
+  - name: Verify dnf-automatic.timer is disabled on RedHat Slurm
+    when:
+      - ansible_facts['os_family'] == "RedHat"
+      - install_slurm | default(false) | bool
+    block:
+      - name: Check if dnf-automatic.timer is disabled
+        ansible.builtin.systemd:
+          name: dnf-automatic.timer
+        register: dnf_automatic_status
+        check_mode: yes
+        ignore_errors: yes
+
+      - name: Report dnf-automatic.timer status
+        ansible.builtin.debug:
+          msg: >-
+            {{ "SUCCESS: dnf-automatic.timer is disabled."
+            if (not (dnf_automatic_status.enabled | default(false)) and (dnf_automatic_status.status.UnitFileState | default('disabled')) != 'enabled') else
+            "FAILURE: dnf-automatic.timer is enabled." }}
+        when: dnf_automatic_status is not failed
+
+      - name: Fail if dnf-automatic.timer is enabled
+        ansible.builtin.fail:
+          msg: "FAILURE: dnf-automatic.timer is enabled."
+        when:
+          - dnf_automatic_status is not failed
+          - (dnf_automatic_status.enabled | default(false)) or ((dnf_automatic_status.status.UnitFileState | default('disabled')) == 'enabled')
+
+      - name: Report dnf-automatic.timer not found
+        ansible.builtin.debug:
+          msg: "SUCCESS: dnf-automatic.timer not found."
+        when: dnf_automatic_status is failed
+
   - name: Check if limits file exists
     ansible.builtin.stat:
       path: "/etc/security/limits.d/99-unlimited.conf"
@@ -89,8 +121,8 @@
 
       - name: Verify stack limit
         ansible.builtin.assert:
-          that: "'* - stack 8192' in limits_content"
-          fail_msg: "FAILURE: Missing '* - stack 8192' in limits file."
+          that: "('* - stack ' ~ ('unlimited' if (ansible_facts['os_family'] == 'RedHat' and (install_slurm | default(false) | bool) and ansible_facts['architecture'] == 'x86_64') else '8192')) in limits_content"
+          fail_msg: "FAILURE: Missing '* - stack {{ 'unlimited' if (ansible_facts['os_family'] == 'RedHat' and (install_slurm | default(false) | bool) and ansible_facts['architecture'] == 'x86_64') else '8192' }}' in limits file."
           quiet: yes
 
       - name: Verify cpu limit

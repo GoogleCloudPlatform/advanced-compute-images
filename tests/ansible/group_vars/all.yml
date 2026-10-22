@@ -15,5 +15,6 @@
 ---
 hpc_user: "{{ 'ubuntu' if ansible_facts['os_family'] == 'Debian' else 'rocky' }}"
 spack_root: /opt/apps/spack
+spack_gcc_version: "14.3.0"
 # Where you want your symlinks (views) to live
 apps_path: /apps

@@ -92,7 +92,7 @@
     . {{ spack_root }}/share/spack/setup-env.sh
 
     # Create a dynamic bucket path based on the OS (e.g., ubuntu-22 or rocky-9)
-    OS_BUCKET="{{ spack_cache_url }}-v{{ spack_release_version }}/{{ ansible_facts['distribution'] | lower }}-{{ ansible_facts['distribution_major_version'] }}"
+    OS_BUCKET="{{ spack_os_cache_url }}"
     MIRROR_NAME="hpc_cache"
 
     if ! spack mirror list | grep -q "$MIRROR_NAME"; then
@@ -148,6 +148,49 @@
     executable: /bin/bash
   become: true
   become_user: "{{ hpc_user }}"
+
+- name: Create Spack GPG Key for Signing
+  become: true
+  become_user: "{{ hpc_user }}"
+  ansible.builtin.shell: |
+    export SPACK_PYTHON=/opt/spack-venv/bin/python{{ python_version }}
+    . {{ spack_root }}/share/spack/setup-env.sh
+    # Only create if no secret signing key exists in the configured Spack keystore
+    if ! spack gpg list --signing | grep -q "^sec"; then
+      spack gpg create "{{ spack_gpg_name }}" "{{ spack_gpg_email }}"
+    fi
+  args:
+    executable: /bin/bash
+
+- name: Install and Cache GCC via Spack
+  become: true
+  become_user: "{{ hpc_user }}"
+  when:
+    - ansible_facts['os_family'] == 'RedHat'
+    - install_slurm | default(false) | bool
+    - ansible_facts['architecture'] == 'x86_64'
+  block:
+    - name: Install GCC via Spack and register compiler
+      ansible.builtin.shell: |
+        export SPACK_PYTHON=/opt/spack-venv/bin/python{{ python_version }}
+        . {{ spack_root }}/share/spack/setup-env.sh
+        spack install --use-cache "gcc@{{ spack_gcc_version }}"
+        spack compiler add --scope site "$(spack location -i "gcc@{{ spack_gcc_version }}")"
+      args:
+        executable: /bin/bash
+
+    - name: Push GCC Binary to GCS Cache
+      ansible.builtin.shell: |
+        export SPACK_PYTHON=/opt/spack-venv/bin/python{{ python_version }}
+        . {{ spack_root }}/share/spack/setup-env.sh
+        MIRROR_NAME="hpc_cache"
+        SPEC="gcc@{{ spack_gcc_version }}"
+
+        if ! spack buildcache check --mirror-url "{{ spack_os_cache_url }}" "$SPEC" ; then
+          spack buildcache push --force "$MIRROR_NAME" "$SPEC"
+        fi
+      args:
+        executable: /bin/bash
 
 # -----------------------------------------------------------------
 # System Integration
