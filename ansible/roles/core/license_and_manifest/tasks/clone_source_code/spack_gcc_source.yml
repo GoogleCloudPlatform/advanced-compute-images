@@ -1,0 +1,75 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+# GCC (GPL-3.0-or-later with the GCC Runtime Library Exception) and the gmp,
+# mpfr and mpc libraries it links (LGPL-3.0-or-later) are installed with Spack.
+# Ship the exact sources Spack used for the installed GCC and its dependencies.
+# The zip holds the full GCC release source, Fortran included, so when it is
+# created the separate gcc-gfortran clone of GCC master is skipped (see
+# source_code_mirrors.yml). gcc-gfortran itself is a yum package.
+- name: Ensure the source code mirrors directory exists
+  ansible.builtin.file:
+    path: "{{ source_code_mirrors_dir }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Create temporary directory for the Spack GCC sources
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: spack-gcc-src
+  register: spack_gcc_src_dir
+  become: true
+  become_user: "{{ hpc_user }}"
+
+- name: Fetch the sources of the installed Spack GCC and its dependencies
+  ansible.builtin.shell: |
+    export SPACK_PYTHON=/opt/spack-venv/bin/python{{ python_version }}
+    . {{ spack_root }}/share/spack/setup-env.sh
+    gcc_hash=$(spack find --format "{hash}" "gcc@{{ spack_gcc_version }}" | head -n 1)
+    if [ -z "$gcc_hash" ]; then
+      echo "gcc@{{ spack_gcc_version }} is not installed with Spack" >&2
+      exit 1
+    fi
+    spack mirror create --dependencies --directory "{{ spack_gcc_src_dir.path }}" "/${gcc_hash}"
+  args:
+    executable: /bin/bash
+  register: spack_gcc_src_fetch
+  become: true
+  become_user: "{{ hpc_user }}"
+  ignore_errors: true
+
+- name: Zip the Spack GCC sources into the source code mirrors directory
+  ansible.builtin.archive:
+    path: "{{ spack_gcc_src_dir.path }}"
+    dest: "{{ source_code_mirrors_dir }}/spack-gcc-{{ spack_gcc_version }}.zip"
+    format: zip
+  when: spack_gcc_src_fetch is succeeded
+  register: spack_gcc_src_zip
+  become: true
+  ignore_errors: true
+
+- name: Record that the Spack GCC sources are shipped
+  ansible.builtin.set_fact:
+    spack_gcc_source_shipped: true
+  when:
+    - spack_gcc_src_zip is succeeded
+    - spack_gcc_src_zip is not skipped
+
+- name: Clean up the temporary Spack GCC source directory
+  ansible.builtin.file:
+    path: "{{ spack_gcc_src_dir.path }}"
+    state: absent
+  become: true

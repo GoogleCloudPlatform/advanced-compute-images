@@ -569,8 +569,22 @@
     mode: "0644"
   become: true
 
+# Runs before the source code mirrors: when it ships the Spack GCC sources,
+# the separate gcc-gfortran clone is skipped.
+- name: Include Spack GCC source code tasks
+  include_tasks: "clone_source_code/spack_gcc_source.yml"
+  when:
+    - spack_gcc_version is defined
+    - ansible_facts['os_family'] == 'RedHat'
+    - install_slurm | default(false) | bool
+    - ansible_facts['architecture'] == 'x86_64'
+
 - name: Include Source Code Mirrors tasks
   include_tasks: "clone_source_code/source_code_mirrors.yml"
+
+- name: Include Slurm source code tasks
+  include_tasks: "clone_source_code/slurm_source.yml"
+  when: install_slurm | default(false) | bool
 
 - name: Include OS specific role for generating licenses
   include_tasks: "{{ item }}"

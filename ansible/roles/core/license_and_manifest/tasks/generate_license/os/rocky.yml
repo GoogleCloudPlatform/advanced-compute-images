@@ -57,6 +57,12 @@
   loop:
     - name: "slurm-gcp"
       src: "/opt/slurm-gcp-repo/LICENSE"
+
+    - name: "slurm"
+      src: "/usr/local/src/slurm/COPYING"
+
+    - name: "libjwt"
+      src: "/usr/local/src/libjwt/LICENSE"
   become: true
   when:
     - install_slurm
@@ -125,8 +131,35 @@
 
     - name: "perftest"
       url: "https://raw.githubusercontent.com/linux-rdma/perftest/master/COPYING"
+
+    - name: "hdf5"
+      url: "https://raw.githubusercontent.com/HDFGroup/hdf5/develop/LICENSE"
   become: true
   ignore_errors: true
+  loop_control:
+    label: "Downloading {{ item.name }} license"
+
+# GCC's GPL-3.0 text already ships as gcc-gfortran, so only add the GCC Runtime
+# Library Exception and the LGPL-3.0 text for gmp, mpfr and mpc.
+- name: Download licenses for the Spack-built GCC toolchain
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "/usr/share/third_party/licenses/{{ item.name }}"
+    mode: "0644"
+  loop:
+    - name: "spack-gcc-runtime-library-exception"
+      url: "https://raw.githubusercontent.com/gcc-mirror/gcc/master/COPYING.RUNTIME"
+
+    # gmp, mpfr and mpc are used under LGPL-3.0-or-later; their upstream
+    # hosts block scripted downloads, so take the LGPLv3 text from GCC's tree.
+    - name: "spack-gmp-mpfr-mpc"
+      url: "https://raw.githubusercontent.com/gcc-mirror/gcc/master/COPYING3.LIB"
+  become: true
+  ignore_errors: true
+  when:
+    - spack_gcc_version is defined
+    - install_slurm | default(false) | bool
+    - ansible_facts['architecture'] == 'x86_64'
   loop_control:
     label: "Downloading {{ item.name }} license"
 
@@ -138,6 +171,12 @@
   loop:
     - name: "pyxis"
       url: "https://raw.githubusercontent.com/NVIDIA/pyxis/main/LICENSE"
+
+    - name: "enroot"
+      url: "https://raw.githubusercontent.com/NVIDIA/enroot/master/LICENSE"
+
+    - name: "pmix"
+      url: "https://raw.githubusercontent.com/openpmix/openpmix/master/LICENSE"
   become: true
   ignore_errors: true
   when:

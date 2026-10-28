@@ -1,0 +1,46 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+# Slurm is licensed under GPL-2.0-or-later. Ship the exact source tarball that
+# slurm-gcp built Slurm from (downloaded to /usr/local/src), plus any patches
+# applied on top of it (for example the TPU patch), so that the complete
+# corresponding source is available in the image.
+- name: Find the Slurm source tarball
+  ansible.builtin.find:
+    paths: /usr/local/src
+    patterns: "slurm-*.tar.bz2"
+  register: slurm_source_tarballs
+
+- name: Copy the Slurm source tarball to the source code mirrors directory
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "{{ source_code_mirrors_dir }}/{{ item.path | basename }}"
+    remote_src: true
+    mode: "0644"
+  loop: "{{ slurm_source_tarballs.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  become: true
+  ignore_errors: true
+
+- name: Copy the patches applied to Slurm to the source code mirrors directory
+  ansible.builtin.copy:
+    src: "{{ slurm_repo_dest | default('/opt/slurm-gcp-repo') }}/ansible/roles/slurm/files/{{ item }}"
+    dest: "{{ source_code_mirrors_dir }}/slurm-patches/"
+    remote_src: true
+    mode: "0644"
+  loop: "{{ (slurm_extra_vars | default({})).slurm_patch_files | default([]) }}"
+  become: true
+  ignore_errors: true

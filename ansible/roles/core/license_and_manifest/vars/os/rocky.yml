@@ -48,7 +48,7 @@ source_code_mirrors:
   - name: "munge"
     url: "https://github.com/dun/munge.git"
   - name: "nfs-utils"
-    url: "https://github.com/steved/nfs-utils.git"
+    url: "git://git.linux-nfs.org/projects/steved/nfs-utils.git"
   - name: "pdsh"
     url: "https://github.com/chaos/pdsh.git"
   - name: "perftest"

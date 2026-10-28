@@ -44,6 +44,9 @@
   loop: "{{ source_code_mirrors }}"
   loop_control:
     loop_var: mirror
+  # Skip the gcc-gfortran clone of GCC master when spack_gcc_source.yml has
+  # already shipped the full Spack GCC release source.
+  when: not (mirror.name == 'gcc-gfortran' and (spack_gcc_source_shipped | default(false) | bool))
 
 - name: Clean up temporary root directory
   ansible.builtin.file:

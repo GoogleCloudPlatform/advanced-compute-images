@@ -67,6 +67,15 @@
     - name: "slurm-gcp"
       src: "/opt/slurm-gcp-repo/LICENSE"
 
+    - name: "slurm"
+      src: "/usr/local/src/slurm/COPYING"
+
+    - name: "slurm-patches"
+      src: "{{ slurm_repo_dest | default('/opt/slurm-gcp-repo') }}/ansible/roles/slurm/files/patches/COPYING.GPLv2"
+
+    - name: "libjwt"
+      src: "/usr/local/src/libjwt/LICENSE"
+
     - name: "docker-containerd"
       src: "/usr/share/doc/containerd.io/copyright"
 
@@ -90,6 +99,9 @@
 
     - name: "openmpi"
       url: "https://raw.githubusercontent.com/open-mpi/ompi/main/LICENSE"
+
+    - name: "hdf5"
+      url: "https://raw.githubusercontent.com/HDFGroup/hdf5/develop/LICENSE"
   become: true
   ignore_errors: true
   loop_control:
@@ -103,6 +115,12 @@
   loop:
     - name: "pyxis"
       url: "https://raw.githubusercontent.com/NVIDIA/pyxis/main/LICENSE"
+
+    - name: "enroot"
+      url: "https://raw.githubusercontent.com/NVIDIA/enroot/master/LICENSE"
+
+    - name: "pmix"
+      url: "https://raw.githubusercontent.com/openpmix/openpmix/master/LICENSE"
   become: true
   ignore_errors: true
   when:
