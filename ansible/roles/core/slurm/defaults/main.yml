@@ -15,6 +15,8 @@
 ---
 build_slurm_from_git_ref: 6.13.1
 slurm_repo_dest: "/opt/slurm-gcp-repo"
+# Add the official MariaDB 10.11 LTS apt repository before running slurm-gcp.
+slurm_mariadb_upstream_repo: true
 # Variables to pass to the inner ansible-playbook
 slurm_extra_vars:
   reboot: false

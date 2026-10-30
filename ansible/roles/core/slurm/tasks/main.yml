@@ -131,7 +131,9 @@
         url: https://mariadb.org/mariadb_release_signing_key.pgp
         dest: /usr/share/keyrings/mariadb-keyring.pgp
         mode: "0644"
-      when: ansible_facts['distribution'] == "Ubuntu"
+      when:
+        - ansible_facts['distribution'] == "Ubuntu"
+        - slurm_mariadb_upstream_repo | bool
 
     - name: Add Official MariaDB 10.11 LTS Repository
       ansible.builtin.apt_repository:
@@ -139,7 +141,9 @@
           }} main"
         state: present
         filename: mariadb
-      when: ansible_facts['distribution'] == "Ubuntu"
+      when:
+        - ansible_facts['distribution'] == "Ubuntu"
+        - slurm_mariadb_upstream_repo | bool
 
     - name: Remove hdf5 package blocking on Ubuntu
       ansible.builtin.file:

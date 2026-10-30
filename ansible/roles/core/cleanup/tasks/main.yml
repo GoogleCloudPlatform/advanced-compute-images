@@ -40,6 +40,7 @@
       # 3. Trust Google Spack Cache signing keys
       spack buildcache keys --install --trust
     fi
+  when: "'spack' not in exclude_roles_list"
 
 # -----------------------------------------------------------------
 #  HDF5 Security Hardening & Cleanups
