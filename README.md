@@ -78,3 +78,6 @@ To build in specific zones or target a different region with available capacity,
 ```bash
 gcloud builds submit --project YOUR_PROJECT_ID --config=cloudbuild.yaml --substitutions=_ZONES="us-east4-a,us-east4-b,us-east4-c"
 ```
+
+<!-- Copybara export test (safe to delete): line before the internal block, expected on GitHub. -->
+<!-- Copybara export test (safe to delete): line after the internal block, expected on GitHub. -->
