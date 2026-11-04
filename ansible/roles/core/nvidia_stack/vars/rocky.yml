@@ -24,3 +24,9 @@ fabric_manager_version: "580.65.06"
 doca_version: "3.2.1"
 doca_repo_url: "https://linux.mellanox.com/public/repo/doca/{{ doca_version }}/rhel{{ ansible_facts['distribution_major_version'] }}/{{ ansible_facts['architecture']
   }}"
+
+# Nsight Systems release bundled with CUDA 13.2 (the version listed for the
+# NVIDIA distribution amendment, and the one Ubuntu installs). Rocky's
+# cuda-nsight-systems-13-2 only requires "nsight-systems >= 2025.6.3", so without
+# this dnf picks the newest Nsight Systems release in the repo.
+nsight_systems_package: "nsight-systems-2025.6.3"

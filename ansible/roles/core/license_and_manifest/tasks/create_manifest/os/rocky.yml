@@ -22,7 +22,8 @@
 
 - name: Get Common Package Versions (RedHat)
   ansible.builtin.shell: |
-    rpm -q --qf "%{VERSION}-%{RELEASE}\n" {{ item }} 2>/dev/null || echo "Not Found"
+    # rpm -q prints "package X is not installed" on stdout; drop it.
+    rpm -q --qf "%{VERSION}-%{RELEASE}\n" {{ item }} 2>/dev/null | grep -v 'is not installed' || echo "Not Found"
   loop: "{{ common_packages | reject('search', '^@') | list }}"
   register: common_packages_versions
   when: common_packages is defined
@@ -31,7 +32,13 @@
 
 - name: Get Slurm Dependency Versions (RedHat)
   ansible.builtin.shell: |
-    rpm -q --qf "%{VERSION}-%{RELEASE}\n" {{ item }} 2>/dev/null || echo "Not Found"
+    # rpm -q prints "package X is not installed" on stdout; drop it. libjwt is
+    # built from source by the slurm-gcp playbook, so it has no RPM.
+    v=$(rpm -q --qf "%{VERSION}-%{RELEASE}\n" {{ item }} 2>/dev/null | grep -v 'is not installed')
+    if [ -z "$v" ] && [ "{{ item }}" = "libjwt" ]; then
+      v=$(PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig pkg-config --modversion libjwt 2>/dev/null)
+    fi
+    echo "${v:-Not Found}"
   loop:
     - libjwt
     - mariadb-devel

@@ -1,0 +1,45 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+# DCGM ships unmodified, so NVIDIA's nvidia-dcgm.service unit file is never
+# edited. Local settings go in a systemd drop-in instead.
+- name: Create nvidia-dcgm drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/nvidia-dcgm.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Disable DCGM hang detection with a systemd drop-in
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/nvidia-dcgm.service.d/override.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Service]
+      Environment="DCGM_HANGDETECT_DISABLE=1"
+  become: true
+  notify: Reload SystemD
+
+- name: Disable NVIDIA DCGM service by default (enable during boot on GPU nodes)
+  ansible.builtin.systemd:
+    name: nvidia-dcgm.service
+    state: stopped
+    enabled: false
+    daemon_reload: true
+  become: true

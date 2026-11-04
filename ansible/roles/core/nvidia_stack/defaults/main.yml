@@ -18,3 +18,8 @@ cuda_toolkit_version: "13-0"
 install_doca: false
 install_dcgm: false
 dcgm_version: "4.6.1"
+# Fail the build if the driver, Fabric Manager, NSCQ (and IMEX) versions differ.
+# Turned on by the build profiles that pin matching versions.
+verify_nvidia_versions: false
+# install_cudnn and cudnn_version live in ansible/group_vars/all.yml so that the
+# license_and_manifest role, which runs after this role, sees them too.

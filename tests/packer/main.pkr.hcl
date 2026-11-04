@@ -37,6 +37,7 @@ locals {
     release_track  = var.release_track
     fabric_manager_version = var.fabric_manager_version
     nvidia_driver_package_version = var.nvidia_driver_package_version
+    nvidia_driver_version = var.nvidia_driver_version
     fabricmanager_deb      = var.fabricmanager_deb
     cuda_version   = var.cuda_version
     cuda_toolkit_version = var.cuda_toolkit_version

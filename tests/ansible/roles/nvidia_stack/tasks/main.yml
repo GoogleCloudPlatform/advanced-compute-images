@@ -96,26 +96,81 @@
         register: dcgm_status
         changed_when: false
         failed_when: dcgm_status.stdout == 'enabled'
-        when: ansible_facts['os_family'] == "Debian"
 
       - name: Display nvidia-dcgm.service status
         ansible.builtin.debug:
           msg: "nvidia-dcgm.service status: {{ dcgm_status.stdout }}"
-        when: ansible_facts['os_family'] == "Debian"
 
-      - name: Check if nvidia-dcgm.service exists for hang detection test
-        ansible.builtin.stat:
-          path: /lib/systemd/system/nvidia-dcgm.service
-        register: test_dcgm_service_file
-
-      - name: "Verify DCGM hang detection is disabled in nvidia-dcgm.service"
+      - name: "Verify DCGM hang detection is disabled through the systemd drop-in"
         ansible.builtin.shell:
-          cmd: "grep 'DCGM_HANGDETECT_DISABLE=1' /lib/systemd/system/nvidia-dcgm.service"
+          cmd: "grep -x 'Environment=\"DCGM_HANGDETECT_DISABLE=1\"' /etc/systemd/system/nvidia-dcgm.service.d/override.conf"
         register: dcgm_hangdetect_check
         changed_when: false
         failed_when: dcgm_hangdetect_check.rc != 0
-        when: test_dcgm_service_file.stat.exists
+
+      - name: "Verify NVIDIA's DCGM files are unmodified"
+        ansible.builtin.shell:
+          cmd: "dpkg --verify datacenter-gpu-manager-4-core"
+        register: dcgm_verify
+        changed_when: false
+        # dpkg prints nothing and exits 0 only when every file is intact.
+        failed_when: dcgm_verify.rc != 0 or dcgm_verify.stdout != ""
+
+      - name: Test NVIDIA DCGM installation (check dcgmi version)
+        ansible.builtin.shell:
+          cmd: "dcgmi --version"
+        register: dcgm_version
+        changed_when: false
+        failed_when: dcgm_version.rc != 0
     when: install_dcgm | default(false) | bool
+
+  - name: Verify the CUDA Toolkit ships whole
+    block:
+      - name: "Verify bundled Nsight Compute and Nsight Systems are present"
+        ansible.builtin.stat:
+          path: "/usr/local/cuda/bin/{{ item }}"
+        loop:
+          - ncu
+          - nsys
+        register: nsight_bins
+        failed_when: not nsight_bins.stat.exists
+
+      - name: "Verify the apt preference blocking Nsight is absent"
+        ansible.builtin.stat:
+          path: /etc/apt/preferences.d/99-nvidia-cuda-exclude-nsight.pref
+        register: nsight_pref
+        failed_when: nsight_pref.stat.exists
+        when: ansible_facts['os_family'] == "Debian"
+
+      - name: "Find leftover CUDA installers"
+        ansible.builtin.find:
+          paths: /usr/local/nvidia
+          patterns: "cuda_*.run"
+        register: cuda_installers
+
+      - name: "Verify the CUDA installer was removed from the image"
+        ansible.builtin.assert:
+          that: cuda_installers.matched == 0
+          fail_msg: "CUDA installer left in image: {{ cuda_installers.files | map(attribute='path') | list }}"
+
+  - name: "Verify cuDNN 9 is installed"
+    ansible.builtin.shell:
+      cmd: "ldconfig -p | grep -q 'libcudnn.so.9'"
+    register: cudnn_check
+    changed_when: false
+    failed_when: cudnn_check.rc != 0
+    when: install_cudnn | default(true) | bool
+
+  - name: "Verify NVIDIA license texts are bundled"
+    ansible.builtin.stat:
+      path: "/usr/share/third_party/licenses/{{ item }}"
+    loop: >-
+      {{ ['nvidia-cuda-toolkit', 'nvidia-driver', 'nvidia-fabricmanager', 'libnvidia-nscq']
+         + (['nvidia-imex'] if (ansible_facts['os_family'] == 'Debian' and ansible_facts['architecture'] in ['aarch64', 'arm64']) else [])
+         + (['nvidia-cudnn'] if (install_cudnn | default(true) | bool) else [])
+         + (['nvidia-dcgm'] if (install_dcgm | default(false) | bool) else []) }}
+    register: nvidia_license_files
+    failed_when: not nvidia_license_files.stat.exists or nvidia_license_files.stat.size == 0
 
   - name: Test NVIDIA DOCA installation (check for ofed)
     ansible.builtin.shell:
@@ -129,15 +184,6 @@
     changed_when: false
     failed_when: doca_check.rc != 0
     when: install_doca | default(false)
-
-  - name: Test NVIDIA DCGM installation (check dcgmi version)
-    ansible.builtin.shell:
-      cmd: "dcgmi --version"
-    register: dcgm_version
-    changed_when: false
-    failed_when: dcgm_version.rc != 0
-    when: install_dcgm | default(false) | bool
-
 
   rescue:
   - name: Use the failure_recorder role to log this failure

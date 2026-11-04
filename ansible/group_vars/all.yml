@@ -28,6 +28,14 @@ apps_path: /apps
 # Toggles kernel update during Packer build
 update_kernel: false
 
+# cuDNN ships whole from NVIDIA's CUDA repo (Exhibit A-1 of the NVIDIA Software
+# Distribution Amendment). Defined here rather than in the nvidia_stack role
+# defaults so later roles (license_and_manifest) see the same values. The
+# package names are set per OS in roles/core/nvidia_stack/vars/. The Rocky CPU
+# images don't get cuDNN; tests/ansible/group_vars/all.yml sets the same value.
+install_cudnn: "{{ ansible_facts['distribution'] != 'Rocky' }}"
+cudnn_version: "9.17.1.4-1"
+
 # Shared TPU Enroot Configuration
 enroot_tpu_config: |
   ENROOT_CONFIG_PATH     ${HOME}/.enroot

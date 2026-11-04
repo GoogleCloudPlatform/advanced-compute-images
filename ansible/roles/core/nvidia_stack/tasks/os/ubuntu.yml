@@ -29,6 +29,11 @@
   when: ansible_facts['distribution_major_version'] | int >= 24
 
 # ---------- Install CUDA ----------
+- name: Check whether the CUDA Toolkit is already installed
+  ansible.builtin.stat:
+    path: "/usr/local/cuda-{{ cuda_version.split('.')[:2] | join('.') }}"
+  register: cuda_toolkit_dir
+
 - name: Download CUDA installer from NVIDIA
   ansible.builtin.get_url:
     url: "{{ cuda_runfile_url }}"
@@ -36,70 +41,82 @@
     mode: "0755"
   register: cuda_download
   changed_when: cuda_download.changed
+  when: not cuda_toolkit_dir.stat.exists
 - name: Run CUDA installer
   ansible.builtin.command:
     cmd: "{{ nvidia_installation_path }}/{{ cuda_installer_file_name }} --silent --toolkit"
   args:
-    creates: /usr/local/cuda-{{ cuda_version }}
-- name: Create apt preference to prevent Nsight tools from NVIDIA repo
+    creates: /usr/local/cuda-{{ cuda_version.split('.')[:2] | join('.') }}
+
+# The CUDA Toolkit ships whole, including the bundled Nsight Compute and Nsight
+# Systems, under the NVIDIA Software Distribution Amendment. Only the multi-GB
+# installer itself is removed from the image.
+- name: Remove CUDA installer from the image
+  ansible.builtin.file:
+    path: "{{ nvidia_installation_path }}/{{ cuda_installer_file_name }}"
+    state: absent
+  become: true
+
+# Images built before GA blocked Nsight packages from NVIDIA's repo. Remove that
+# preference and keep only the lower priority for the NVIDIA CUDA repo, so the
+# Ubuntu archive stays preferred for packages present in both.
+- name: Remove apt preference that blocked Nsight packages from NVIDIA repo
+  ansible.builtin.file:
+    path: /etc/apt/preferences.d/99-nvidia-cuda-exclude-nsight.pref
+    state: absent
+  become: true
+
+- name: Create apt preference for NVIDIA CUDA repo priority
   ansible.builtin.copy:
-    dest: /etc/apt/preferences.d/99-nvidia-cuda-exclude-nsight.pref
+    dest: /etc/apt/preferences.d/99-nvidia-cuda-repo-priority.pref
     mode: "0644"
     owner: root
     group: root
     content: |
-      Package: nsight-compute
-      Pin: release l=NVIDIA CUDA
-      Pin-Priority: -1
-
-      Package: nsight-systems
-      Pin: release l=NVIDIA CUDA
-      Pin-Priority: -1
-
       Package: *
       Pin: release l=NVIDIA CUDA
       Pin-Priority: 400
-
   become: true
 
-# ---------- Remove local Nsight Install ----------
-# The following tasks remove Nsight components from the local CUDA installation path.
-# This ensures that Nsight tools installed by the CUDA runfile are removed.
-- name: Find versioned Nsight directories
-  ansible.builtin.find:
-    paths: "/usr/local/cuda-{{ cuda_version.split('.')[:2] | join('.') }}"
-    patterns:
-      - "nsight-compute-*"
-      - "nsight-systems-*"
-    file_type: directory
-  register: nsight_dirs
+# ---------- Configure NVIDIA CUDA apt repository ----------
+- name: Download CUDA keyring
+  ansible.builtin.get_url:
+    url: "{{ cuda_repo_keyring_url }}"
+    dest: "{{ nvidia_installation_path }}/cuda-keyring_1.1-1_all.deb"
+    mode: "0644"
   become: true
 
-- name: Remove versioned Nsight directories
+- name: Install CUDA keyring
+  ansible.builtin.apt:
+    deb: "{{ nvidia_installation_path }}/cuda-keyring_1.1-1_all.deb"
+  become: true
+
+- name: Remove the downloaded CUDA keyring package from the image
   ansible.builtin.file:
-    path: "{{ item.path }}"
+    path: "{{ nvidia_installation_path }}/cuda-keyring_1.1-1_all.deb"
     state: absent
-  loop: "{{ nsight_dirs.files }}"
   become: true
-  when: nsight_dirs.matched > 0
-  loop_control:
-    label: "{{ item.path }}"
 
-# Remove Nsight binaries/symlinks from bin (as these names are usually stable)
-# and clean up any other Nsight-related files.
-- name: Remove Nsight binaries and plugins
-  ansible.builtin.file:
-    path: "/usr/local/cuda-{{ cuda_version.split('.')[:2] | join('.') }}/{{ item }}"
-    state: absent
-  loop:
-    - bin/ncu
-    - bin/ncu-ui
-    - bin/nsight-sys
-    - bin/nsys
-    - bin/nsys-ui
-    - bin/nsight_ee_plugins_manage.sh
-    - nsightee_plugins
+- name: Update apt cache after adding CUDA repo
+  ansible.builtin.apt:
+    update_cache: true
   become: true
+
+# ---------- Install cuDNN ----------
+- name: Install and pin cuDNN
+  block:
+    - name: Install cuDNN packages
+      ansible.builtin.apt:
+        name: "{{ cudnn_packages | map('regex_replace', '$', '=' ~ cudnn_version) | list }}"
+        state: present
+
+    - name: Freeze cuDNN package versions
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: "{{ cudnn_packages }}"
+  become: true
+  when: install_cudnn | default(true) | bool
 
 - name: Add CUDA lib path to ld.so.conf.d
   ansible.builtin.lineinfile:
@@ -162,12 +179,20 @@
   become: true
 
 # ---------- Install NVIDIA Driver Components ----------
+# nvidia_driver_version pins the driver packages to one Ubuntu archive release
+# (set per build profile, next to fabric_manager_version). The precompiled kernel
+# module package is versioned per kernel ABI and already depends on one exact
+# nvidia-kernel-common version, so it stays unpinned.
 - name: Set NVIDIA Driver packages fact
   ansible.builtin.set_fact:
-    nvidia_packages: "{{ base_packages + (arm_packages if ansible_facts['architecture'] in ['aarch64', 'arm64'] else []) }}"
+    nvidia_packages: "{{ [kernel_modules_package] + driver_packages }}"
+    nvidia_package_specs: >-
+      {{ [kernel_modules_package]
+         + ((driver_packages | map('regex_replace', '$', '=' ~ nvidia_driver_version) | list)
+            if (nvidia_driver_version | default('') | length > 0) else driver_packages) }}
   vars:
+    kernel_modules_package: "linux-modules-nvidia-{{ nvidia_driver_package_version }}-open-{{ ansible_facts['kernel'] }}"
     base_packages:
-      - "linux-modules-nvidia-{{ nvidia_driver_package_version }}-open-{{ ansible_facts['kernel'] }}"
       - "nvidia-compute-utils-{{ nvidia_driver_package_version }}"
       - "nvidia-kernel-common-{{ nvidia_driver_package_version }}"
       - "nvidia-utils-{{ nvidia_driver_package_version }}"
@@ -175,10 +200,11 @@
       - "libnvidia-nscq-{{ nvidia_driver_package_version.split('-')[0] }}"
     arm_packages:
       - "nvidia-imex-{{ nvidia_driver_package_version.split('-')[0] }}"
+    driver_packages: "{{ base_packages + (arm_packages if ansible_facts['architecture'] in ['aarch64', 'arm64'] else []) }}"
 
 - name: Install NVIDIA Driver packages for the running kernel
   ansible.builtin.apt:
-    name: "{{ nvidia_packages }}"
+    name: "{{ nvidia_package_specs }}"
     state: present
   notify: Reload SystemD
 
@@ -228,10 +254,20 @@
     deb: "{{ nvidia_installation_path }}/{{ fabricmanager_deb }}"
   become: true
 
+# Hold Fabric Manager like the driver packages. Later steps (the slurm-gcp
+# playbook and the final apt upgrade in the cleanup role) run apt upgrades, and
+# NVIDIA's repo carries newer Fabric Manager releases that would otherwise
+# replace the pinned one.
 - name: Freeze Fabric Manager package version
   ansible.builtin.dpkg_selections:
     name: nvidia-fabricmanager
     selection: hold
+  become: true
+
+- name: Remove the downloaded Fabric Manager package from the image
+  ansible.builtin.file:
+    path: "{{ nvidia_installation_path }}/{{ fabricmanager_deb }}"
+    state: absent
   become: true
 
 # ---------- Install NVIDIA DOCA ----------
@@ -266,57 +302,20 @@
   when: install_doca
 
 # ---------- Install DCGM ----------
-- name: Install and configure DCGM
+# NVIDIA's DCGM 4 packages are installed unmodified. Service configuration lives
+# in a systemd drop-in (see tasks/dcgm_service.yml), never in NVIDIA's unit file.
+- name: Install and pin DCGM
   block:
-    - name: Download CUDA keyring
-      ansible.builtin.get_url:
-        url: "https://developer.download.nvidia.com/compute/cuda/repos/{{ ansible_facts['distribution']|lower }}{{ ansible_facts['distribution_major_version'] }}04/{{
-          'sbsa' if ansible_facts['architecture'] == 'aarch64' else 'x86_64' }}/cuda-keyring_1.1-1_all.deb"
-        dest: "{{ nvidia_installation_path }}/cuda-keyring_1.1-1_all.deb"
-        mode: "0644"
-
-    - name: Install CUDA keyring
-      ansible.builtin.apt:
-        deb: "{{ nvidia_installation_path }}/cuda-keyring_1.1-1_all.deb"
-
-    - name: Update apt cache after adding CUDA repo for DCGM
-      ansible.builtin.apt:
-        update_cache: true
-
     - name: Install DCGM packages
       ansible.builtin.apt:
-        name:
-          - datacenter-gpu-manager-4-core=1:{{ dcgm_version }}-1
-          - datacenter-gpu-manager-4-dev=1:{{ dcgm_version }}-1
-          - datacenter-gpu-manager-4-cuda{{ cuda_version.split('.')[0] }}=1:{{ dcgm_version }}-1
-          - datacenter-gpu-manager-4-proprietary=1:{{ dcgm_version }}-1
-          - datacenter-gpu-manager-4-proprietary-cuda{{ cuda_version.split('.')[0] }}=1:{{ dcgm_version }}-1
+        name: "{{ dcgm_packages | map('regex_replace', '$', '=' ~ dcgm_package_version) | list }}"
         state: present
 
     - name: Freeze DCGM package versions
       ansible.builtin.dpkg_selections:
         name: "{{ item }}"
         selection: hold
-      loop:
-        - datacenter-gpu-manager-4-core
-        - datacenter-gpu-manager-4-dev
-        - datacenter-gpu-manager-4-cuda{{ cuda_version.split('.')[0] }}
-        - datacenter-gpu-manager-4-proprietary
-        - datacenter-gpu-manager-4-proprietary-cuda{{ cuda_version.split('.')[0] }}
-
-    - name: Check if nvidia-dcgm.service exists
-      ansible.builtin.stat:
-        path: /lib/systemd/system/nvidia-dcgm.service
-      register: dcgm_service_file
-
-    - name: Disable DCGM hang detection in nvidia-dcgm.service
-      ansible.builtin.lineinfile:
-        path: /lib/systemd/system/nvidia-dcgm.service
-        insertafter: "^\\[Service\\]"
-        line: 'Environment="DCGM_HANGDETECT_DISABLE=1"'
-        state: present
-      when: dcgm_service_file.stat.exists
-      notify: Reload SystemD
+      loop: "{{ dcgm_packages }}"
   become: true
   when: install_dcgm | default(false) | bool
 
@@ -329,31 +328,3 @@
   become: true
   loop:
     - nvidia-persistenced.service
-
-- name: Disable NVIDIA DCGM service by default (enable during boot on GPU nodes)
-  ansible.builtin.service:
-    name: nvidia-dcgm.service
-    state: stopped
-    enabled: false
-  become: true
-  when: install_dcgm | default(false) | bool
-
-- name: Delete non-distributable files after NVIDIA stack installation
-  ansible.builtin.file:
-    path: "/usr/local/cuda/lib64/{{ item }}"
-    state: absent
-  loop:
-    - libOpenCL.so
-    - libOpenCL.so.1
-    - libOpenCL.so.1.0
-    - libOpenCL.so.1.0.0
-    - libaccinj64.so
-    - libaccinj64.so.12.8
-    - libaccinj64.so.12.8.57
-    - libcufilt.a
-    - libcuinj64.so
-    - libcuinj64.so.12.8
-    - libcuinj64.so.12.8.5
-    - libcuinj64.so.12.8.57
-    - libmetis_static.a
-  become: true

@@ -58,12 +58,6 @@
     remote_src: true
     mode: "0644"
   loop:
-    - name: "cuda-toolkit-and-driver"
-      src: "/usr/local/cuda/EULA.txt"
-
-    - name: "libnvfatbin"
-      src: "/usr/local/cuda/EULA.txt"
-
     - name: "slurm-gcp"
       src: "/opt/slurm-gcp-repo/LICENSE"
 
@@ -78,9 +72,6 @@
 
     - name: "docker-containerd"
       src: "/usr/share/doc/containerd.io/copyright"
-
-    - name: "nvidia-fabricmanager"
-      src: "/usr/share/doc/nvidia-fabricmanager-{{ fabric_manager_version.split('.')[0] }}/copyright"
 
     - name: "spack"
       src: "/opt/apps/spack/LICENSE-MIT"

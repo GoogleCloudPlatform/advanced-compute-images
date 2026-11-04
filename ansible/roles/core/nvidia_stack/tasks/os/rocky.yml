@@ -32,13 +32,14 @@
   notify: Update dnf cache
 
 # ---------- Install CUDA Toolkit ----------
+# The CUDA Toolkit ships whole, including the bundled Nsight Compute and Nsight
+# Systems packages, under the NVIDIA Software Distribution Amendment.
 - name: Install CUDA Toolkit packages
   ansible.builtin.dnf:
-    name: "cuda-toolkit-{{ cuda_toolkit_version }}"
+    name:
+      - "cuda-toolkit-{{ cuda_toolkit_version }}"
+      - "{{ nsight_systems_package }}"
     state: present
-    exclude:
-      - nsight-compute
-      - nsight-systems
   register: cuda_toolkit_install
 
 - name: Add CUDA lib path to ld.so.conf.d
@@ -93,7 +94,10 @@
 
 - name: Install NVIDIA proprietary driver packages via cuda-drivers meta-package
   ansible.builtin.dnf:
-    name: cuda-drivers
+    # Pinned to fabric_manager_version: Fabric Manager only starts when it
+    # matches the driver version exactly, and cuda-drivers-<version> requires
+    # every driver package at exactly that version.
+    name: "cuda-drivers-{{ fabric_manager_version }}"
     state: present
   notify: Reload SystemD
 
@@ -162,10 +166,14 @@
     enabled: true
   become: true
 
-# ---------- Install Fabric Manager ----------
-- name: Install NVIDIA Fabric Manager from NVIDIA CUDA repo
+# ---------- Install Fabric Manager and NSCQ ----------
+# NSCQ (libnvidia-nscq, the NVSwitch query library) is installed at the same
+# release as the driver, like on Ubuntu, where it comes with the driver packages.
+- name: Install NVIDIA Fabric Manager and NSCQ from NVIDIA CUDA repo
   ansible.builtin.dnf:
-    name: "nvidia-fabricmanager-{{ fabric_manager_version }}"
+    name:
+      - "nvidia-fabricmanager-{{ fabric_manager_version }}"
+      - "libnvidia-nscq-{{ fabric_manager_version }}"
     state: present
   become: true
 
@@ -188,6 +196,29 @@
       become: true
   when: install_doca
 
+# ---------- Lock NVIDIA package versions ----------
+# Later steps run dnf updates (for example the slurm-gcp playbook). Lock the
+# NVIDIA packages at the versions installed above: Fabric Manager and NSCQ must
+# match the driver, and Nsight must stay at the version listed for the NVIDIA
+# distribution amendment.
+- name: Install the dnf versionlock plugin
+  ansible.builtin.dnf:
+    name: python3-dnf-plugin-versionlock
+    state: present
+  become: true
+
+- name: Lock NVIDIA package versions
+  ansible.builtin.shell: |
+    set -euo pipefail
+    pkgs=$(rpm -qa --qf '%{NAME}\n' 'cuda-drivers*' 'nvidia-*' 'kmod-nvidia*' 'libnvidia-*' \
+      'nsight-systems-*' 'nsight-compute-*' | sort -u)
+    dnf versionlock add $pkgs
+  args:
+    executable: /bin/bash
+  register: nvidia_versionlock
+  changed_when: "'Adding versionlock' in nvidia_versionlock.stdout"
+  become: true
+
 # ---------- Disable GPU services ----------
 - name: Disable NVIDIA GPU services by default (enable during boot on GPU nodes)
   ansible.builtin.service:
@@ -197,23 +228,3 @@
   become: true
   loop:
     - nvidia-persistenced.service
-
-- name: Delete non-distributable files after NVIDIA stack installation
-  ansible.builtin.file:
-    path: "/usr/local/cuda/lib64/{{ item }}"
-    state: absent
-  loop:
-    - libOpenCL.so
-    - libOpenCL.so.1
-    - libOpenCL.so.1.0
-    - libOpenCL.so.1.0.0
-    - libaccinj64.so
-    - libaccinj64.so.12.8
-    - libaccinj64.so.12.8.57
-    - libcufilt.a
-    - libcuinj64.so
-    - libcuinj64.so.12.8
-    - libcuinj64.so.12.8.5
-    - libcuinj64.so.12.8.57
-    - libmetis_static.a
-  become: true

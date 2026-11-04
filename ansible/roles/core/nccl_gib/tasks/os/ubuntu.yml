@@ -13,19 +13,41 @@
 # limitations under the License.
 
 ---
-- name: Download CUDA keyring
-  ansible.builtin.get_url:
-    url: "https://developer.download.nvidia.com/compute/cuda/repos/{{ ansible_facts['distribution'] | lower }}{{ ansible_facts['distribution_major_version'] }}04/{{
-      'sbsa' if ansible_facts['architecture'] == 'aarch64' else 'x86_64' }}/cuda-keyring_1.1-1_all.deb"
-    dest: "{{ nvidia_installation_path }}/cuda-keyring_1.1-1_all.deb"
-    mode: "0644"
-- name: Install CUDA keyring
-  ansible.builtin.apt:
-    deb: "{{ nvidia_installation_path }}/cuda-keyring_1.1-1_all.deb"
-  become: true
-- name: Update apt cache after adding CUDA repo
-  ansible.builtin.apt:
-    update_cache: true
+# The nvidia_stack role normally installs the CUDA apt keyring already; only add
+# it here when it is missing (for example a GPU image built without nvidia_stack).
+- name: Check whether the CUDA apt keyring is installed
+  ansible.builtin.command: dpkg-query -W -f='${Status}' cuda-keyring
+  register: cuda_keyring_status
+  changed_when: false
+  failed_when: false
+
+- name: Configure the NVIDIA CUDA apt repository
+  when: "'install ok installed' not in cuda_keyring_status.stdout"
+  block:
+    - name: Ensure the NVIDIA download directory exists
+      ansible.builtin.file:
+        path: "{{ nvidia_installation_path }}"
+        state: directory
+        mode: "0755"
+      become: true
+    - name: Download CUDA keyring
+      ansible.builtin.get_url:
+        url: "https://developer.download.nvidia.com/compute/cuda/repos/{{ ansible_facts['distribution'] | lower }}{{ ansible_facts['distribution_major_version'] }}04/{{
+          'sbsa' if ansible_facts['architecture'] == 'aarch64' else 'x86_64' }}/cuda-keyring_1.1-1_all.deb"
+        dest: "{{ nvidia_installation_path }}/cuda-keyring_1.1-1_all.deb"
+        mode: "0644"
+    - name: Install CUDA keyring
+      ansible.builtin.apt:
+        deb: "{{ nvidia_installation_path }}/cuda-keyring_1.1-1_all.deb"
+      become: true
+    - name: Remove the downloaded CUDA keyring package from the image
+      ansible.builtin.file:
+        path: "{{ nvidia_installation_path }}/cuda-keyring_1.1-1_all.deb"
+        state: absent
+      become: true
+    - name: Update apt cache after adding CUDA repo
+      ansible.builtin.apt:
+        update_cache: true
 
 - name: Add Google Cloud apt-key.gpg for repository verification
   ansible.builtin.apt_key:

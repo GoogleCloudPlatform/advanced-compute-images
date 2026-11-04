@@ -66,6 +66,12 @@ variable "nvidia_driver_package_version" {
   default = "580-server"
 }
 
+variable "nvidia_driver_version" {
+  type        = string
+  description = "Exact Ubuntu archive version of the nvidia_driver_package_version driver packages (e.g. 595.91.07-0ubuntu0.24.04.1). Empty leaves the driver unpinned. Bump together with fabric_manager_version and fabricmanager_deb."
+  default     = ""
+}
+
 variable "fabricmanager_deb" {
   type        = string
   description = "NVIDIA fabric manager deb package."
@@ -166,7 +172,13 @@ variable "test_results_gcs_path" {
 variable "install_dcgm" {
   type        = bool
   default     = false
-  description = "Flag to gate NVIDIA DCGM installation pending legal approval."
+  description = "Flag to install the NVIDIA DCGM 4 package set (shipped unmodified, service disabled by default)."
+}
+
+variable "verify_nvidia_versions" {
+  type        = bool
+  default     = false
+  description = "Fail the build if the NVIDIA driver, Fabric Manager, NSCQ and (Ubuntu arm64) IMEX versions differ. Set in build profiles that pin matching versions."
 }
 
 variable "apply_os_configs" {

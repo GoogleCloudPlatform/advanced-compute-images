@@ -45,6 +45,7 @@ locals {
     release_track            = var.release_track
     fabric_manager_version   = var.fabric_manager_version
     nvidia_driver_package_version = var.nvidia_driver_package_version
+    nvidia_driver_version    = var.nvidia_driver_version
     fabricmanager_deb       = var.fabricmanager_deb
     cuda_version             = var.cuda_version
     cuda_toolkit_version     = var.cuda_toolkit_version
@@ -62,6 +63,7 @@ locals {
     install_nvidia_stack     = local.has_nvidia_stack
     install_lustre           = local.has_lustre
     install_dcgm             = var.install_dcgm
+    verify_nvidia_versions   = var.verify_nvidia_versions
 
     # List-driven pass-through parameters
     extra_roles              = var.ansible_extra_roles

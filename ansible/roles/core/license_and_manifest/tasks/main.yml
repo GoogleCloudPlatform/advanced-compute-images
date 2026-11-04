@@ -138,7 +138,11 @@
         if [ -f /proc/driver/nvidia/version ]; then
           awk '/NVRM version/ {print $10}' /proc/driver/nvidia/version
         else
+          {% if ansible_facts['os_family'] == 'Debian' %}
           dpkg-query -W -f='${Version}\n' 'nvidia-kernel-common-*' 2>/dev/null | sort -V | tail -n1 || echo "Not Found"
+          {% else %}
+          rpm -q --qf '%{VERSION}-%{RELEASE}\n' nvidia-driver 2>/dev/null | grep -v 'not installed' || echo "Not Found"
+          {% endif %}
         fi
       register: nvidia_driver_version_out
       args:
@@ -153,7 +157,11 @@
 
     - name: Get NVIDIA Container Toolkit Packages Versions
       ansible.builtin.shell: |
+        {% if ansible_facts['os_family'] == 'Debian' %}
         dpkg-query -W -f='${Version}\n' {{ item }} 2>/dev/null || echo "Not Found"
+        {% else %}
+        rpm -q --qf '%{VERSION}-%{RELEASE}\n' {{ item }} 2>/dev/null | grep -v 'not installed' || echo "Not Found"
+        {% endif %}
       loop:
         - libnvidia-container-tools
         - libnvidia-container1
@@ -173,12 +181,17 @@
 
     - name: Get Fabric Manager Version
       ansible.builtin.shell: |
-        out=$(dpkg-query -W -f='${Version}\n' 'nvidia-fabricmanager*' 2>/dev/null | sort -V | tail -n1)
+        {% if ansible_facts['os_family'] == 'Debian' %}
+        # The NVIDIA repo names the package nvidia-fabricmanager; the Ubuntu archive
+        # uses nvidia-fabricmanager-BRANCH. Installed or held packages only.
+        out=$(dpkg-query -W -f='${db:Status-Abbrev} ${Version}\n' nvidia-fabricmanager 2>/dev/null | awk '$1 ~ /^[ih]i/ {print $2}')
         if [ -z "$out" ]; then
-          echo "Not Found"
-        else
-          echo "$out"
+          out=$(dpkg-query -W -f='${db:Status-Abbrev} ${Version}\n' 'nvidia-fabricmanager-[0-9]*' 2>/dev/null | awk '$1 ~ /^[ih]i/ {print $2}' | sort -V | tail -n1)
         fi
+        {% else %}
+        out=$(rpm -q --qf '%{VERSION}-%{RELEASE}\n' nvidia-fabricmanager 2>/dev/null | grep -v 'not installed' | head -n1)
+        {% endif %}
+        echo "${out:-Not Found}"
       register: fabric_manager_version_out
       changed_when: false
       failed_when: false
@@ -187,6 +200,23 @@
       ansible.builtin.set_fact:
         manifest_lines: |
           {{ manifest_lines }}nvidia-fabricmanager="{{ (fabric_manager_version_out | default({})).stdout | default('Not Found') | trim }}"
+
+    - name: Get NSCQ Version
+      ansible.builtin.shell: |
+        {% if ansible_facts['os_family'] == 'Debian' %}
+        out=$(dpkg-query -W -f='${db:Status-Abbrev} ${Version}\n' 'libnvidia-nscq-*' 2>/dev/null | awk '$1 ~ /^[ih]i/ {print $2}' | sort -V | tail -n1)
+        {% else %}
+        out=$(rpm -q --qf '%{VERSION}-%{RELEASE}\n' libnvidia-nscq 2>/dev/null | grep -v 'not installed' | head -n1)
+        {% endif %}
+        echo "${out:-Not Found}"
+      register: nscq_version_out
+      changed_when: false
+      failed_when: false
+
+    - name: Add NSCQ to Manifest
+      ansible.builtin.set_fact:
+        manifest_lines: |
+          {{ manifest_lines }}libnvidia-nscq="{{ (nscq_version_out | default({})).stdout | default('Not Found') | trim }}"
 
     - name: Get IMEX Driver Version
       ansible.builtin.shell: |
@@ -201,6 +231,42 @@
         manifest_lines: |
           {{ manifest_lines }}nvidia-imex="{{ (imex_version_out | default({})).stdout | default('Not Found') | trim }}"
       when: ansible_facts['architecture'] == 'aarch64'
+
+    # cuDNN and DCGM are installed on Ubuntu only, so the loop is empty on Rocky.
+    - name: Get cuDNN and DCGM Package Versions
+      ansible.builtin.shell: |
+        out=$(dpkg-query -W -f='${Version}\n' '{{ item }}' 2>/dev/null | head -n1)
+        echo "${out:-Not Found}"
+      loop: "{{ _cudnn_dcgm_packages if ansible_facts['os_family'] == 'Debian' else [] }}"
+      vars:
+        _cudnn_dcgm_packages:
+          - "libcudnn9-cuda-{{ cuda_version.split('.')[0] }}"
+          - datacenter-gpu-manager-4-core
+      register: nvidia_extra_versions_out
+      changed_when: false
+      failed_when: false
+
+    - name: Get bundled Nsight Versions
+      ansible.builtin.shell: |
+        {% if ansible_facts['os_family'] == 'Debian' %}
+        out=$(ls -d /usr/local/cuda-{{ cuda_version.split('.')[:2] | join('.') }}/{{ item }}-* 2>/dev/null | sed 's#.*/{{ item }}-##' | sort -V | tail -n1)
+        {% else %}
+        out=$(rpm -qa --qf '%{NAME}\n' '{{ item }}-20*' | sed 's#^{{ item }}-##' | sort -V | tail -n1)
+        {% endif %}
+        echo "${out:-Not Found}"
+      loop:
+        - nsight-compute
+        - nsight-systems
+      register: nsight_versions_out
+      changed_when: false
+      failed_when: false
+
+    - name: Add cuDNN, DCGM and Nsight to Manifest
+      ansible.builtin.set_fact:
+        manifest_lines: |
+          {{ manifest_lines }}{% for res in nvidia_extra_versions_out.results + nsight_versions_out.results %}
+          {{ res.item }}="{{ res.stdout | trim }}"
+          {% endfor %}
 
 - name: Collect NCCL Versions
   when: hw_type == "gpu"
@@ -302,11 +368,12 @@
         if [ -f "{{ spack_root }}/share/spack/setup-env.sh" ]; then
           . "{{ spack_root }}/share/spack/setup-env.sh"
         fi
+        # Spack can hold more than one openmpi build of the same version, so
+        # list each version once to keep the manifest entry on one line.
         if command -v spack > /dev/null 2>&1; then
-          spack find --format "{name} {version}" | grep "openmpi" | awk '{print $2}' || echo "Not Found"
-        else
-          echo "Not Found"
+          out=$(spack find --format "{name} {version}" | awk '$1 == "openmpi" {print $2}' | sort -uV | paste -sd ' ' -)
         fi
+        echo "${out:-Not Found}"
       register: ompi_version_out
       changed_when: false
       failed_when: false
@@ -592,6 +659,10 @@
     - generate_license/os/{{ ansible_facts['distribution']|lower }}-{{ ansible_facts['distribution_version'] }}.yml
     - generate_license/os/{{ ansible_facts['distribution']|lower }}-{{ ansible_facts['distribution_major_version'] }}.yml
     - generate_license/os/{{ ansible_facts['distribution']|lower }}.yml
+
+- name: Bundle NVIDIA license texts
+  include_tasks: "generate_license/nvidia.yml"
+  when: install_nvidia_stack | default(false) | bool
 
 - name: Copy third party licenses (TPU specific)
   ansible.builtin.shell: |

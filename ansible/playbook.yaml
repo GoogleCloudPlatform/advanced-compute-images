@@ -66,6 +66,17 @@
       ansible.builtin.include_role:
         name: core/cleanup
 
+    # Check again just before the image is finished: later roles (the slurm-gcp
+    # playbook) and the final apt upgrade in the cleanup role change packages,
+    # and Fabric Manager only starts when it matches the NVIDIA driver version
+    # exactly. Runs for build profiles that set verify_nvidia_versions (the 2605
+    # profiles).
+    - name: Check again that the NVIDIA driver, Fabric Manager and NSCQ versions match
+      ansible.builtin.include_tasks: roles/core/nvidia_stack/tasks/verify_driver_versions.yml
+      when:
+        - install_nvidia_stack | default(false) | bool
+        - verify_nvidia_versions | default(false) | bool
+
     - name: Generate License and Manifest
       ansible.builtin.include_role:
         name: core/license_and_manifest

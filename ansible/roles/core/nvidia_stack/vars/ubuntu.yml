@@ -19,11 +19,43 @@ fabric_manager_version: "580.65.06"
 _pkg_arch: "{{ 'amd64' if ansible_facts['architecture'] == 'x86_64' else 'arm64' }}"
 _cuda_suffix: "{{ '' if ansible_facts['architecture'] == 'x86_64' else '_sbsa' }}"
 
-cuda_installer_file_name: "cuda_{{cuda_version}}_{{fabric_manager_version}}_linux{{ _cuda_suffix }}.run"
+# NVIDIA names each CUDA runfile after the driver it bundles. Only the toolkit
+# is installed from it (--toolkit); the driver comes from the Ubuntu archive and
+# Fabric Manager follows that driver, so the runfile name is looked up here
+# instead of being derived from fabric_manager_version.
+cuda_runfile_driver_versions:
+  "13.0.0": "580.65.06"
+  "13.2.2": "595.71.05"
+
+cuda_installer_file_name: "cuda_{{ cuda_version }}_{{ cuda_runfile_driver_versions[cuda_version] | default(fabric_manager_version) }}_linux{{ _cuda_suffix }}.run"
 cuda_runfile_url: "https://developer.download.nvidia.com/compute/cuda/{{ cuda_version }}/local_installers/{{ cuda_installer_file_name }}"
 nvidia_container_toolkit_version: "1.20.2-1"
 nvidia_driver_package_version: "580-server"
+# Exact Ubuntu archive version for the driver packages (set per build profile,
+# next to fabric_manager_version). Empty leaves the driver unpinned.
+nvidia_driver_version: ""
 fabricmanager_deb: "nvidia-fabricmanager_{{fabric_manager_version}}-1_{{ _pkg_arch }}.deb"
 doca_version: "3.2.1"
 doca_repo_url: "https://linux.mellanox.com/public/repo/doca/{{ doca_version }}/{{ ansible_facts['distribution'] | lower }}{{ (ansible_facts['distribution_version'].split('.'))[0:2]
   | join('.') }}/{{ ansible_facts['architecture'] }}"
+cuda_repo_keyring_url: "https://developer.download.nvidia.com/compute/cuda/repos/{{ ansible_facts['distribution'] | lower }}{{ ansible_facts['distribution_major_version'] }}04/{{
+  'sbsa' if ansible_facts['architecture'] == 'aarch64' else 'x86_64' }}/cuda-keyring_1.1-1_all.deb"
+
+# Complete cudnn9-cuda-13 package set from NVIDIA's CUDA repo. The meta-package
+# resolves through cudnn9-cuda-13-1, so every member is pinned to cudnn_version
+# to stop apt from mixing cuDNN releases.
+cudnn_packages:
+  - cudnn9-cuda-13
+  - cudnn9-cuda-13-1
+  - libcudnn9-cuda-13
+  - libcudnn9-dev-cuda-13
+  - libcudnn9-headers-cuda-13
+  - libcudnn9-static-cuda-13
+
+dcgm_package_version: "1:{{ dcgm_version }}-1"
+dcgm_packages:
+  - datacenter-gpu-manager-4-core
+  - datacenter-gpu-manager-4-dev
+  - datacenter-gpu-manager-4-cuda{{ cuda_version.split('.')[0] }}
+  - datacenter-gpu-manager-4-proprietary
+  - datacenter-gpu-manager-4-proprietary-cuda{{ cuda_version.split('.')[0] }}

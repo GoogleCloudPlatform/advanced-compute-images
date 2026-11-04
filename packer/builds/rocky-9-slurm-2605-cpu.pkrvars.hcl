@@ -34,8 +34,12 @@ build_slurm_from_git_ref = "6.13.1"
 install_nvidia_stack     = true
 cuda_version             = "13.2.2"
 cuda_toolkit_version     = "13-2"
-fabric_manager_version   = "595.71.05"
+fabric_manager_version   = "595.91.07"
 nvidia_driver_package_version = "595-dkms"
+# Fail the build if the driver, Fabric Manager and NSCQ versions differ.
+verify_nvidia_versions   = true
+# The Rocky CPU images don't ship DCGM (or cuDNN).
+install_dcgm             = false
 nccl_gib_version         = "1.1.0"
 nccl_version             = "2.30.4-1"
 

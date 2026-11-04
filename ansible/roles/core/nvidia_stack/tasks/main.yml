@@ -36,6 +36,17 @@
         - os/{{ ansible_facts['distribution']|lower }}-{{ ansible_facts['distribution_major_version'] }}.yml
         - os/{{ ansible_facts['distribution']|lower }}.yml
 
+    # Only build profiles that pin matching versions set verify_nvidia_versions
+    # (the 2605 profiles); older profiles still pair the 580-server archive
+    # driver with an older Fabric Manager.
+    - name: Check that the NVIDIA driver, Fabric Manager and NSCQ versions match
+      ansible.builtin.include_tasks: verify_driver_versions.yml
+      when: verify_nvidia_versions | default(false) | bool
+
+    - name: Configure the NVIDIA DCGM service
+      ansible.builtin.include_tasks: dcgm_service.yml
+      when: install_dcgm | default(false) | bool
+
     - name: Export global CUDA binary and header paths
       ansible.builtin.copy:
         dest: /etc/profile.d/cuda_path.sh

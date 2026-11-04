@@ -1,0 +1,145 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+# Bundles every applicable NVIDIA license text (NVIDIA Software Distribution
+# Amendment §1(vi)) into the consolidated license directory. The package-native
+# copies under /usr/share/doc and /usr/share/licenses stay in place. The build
+# fails if a required license text is missing or is not plain text.
+- name: Define NVIDIA license sources
+  ansible.builtin.set_fact:
+    nvidia_license_sources:
+      # CUDA Toolkit EULA (also covers the bundled Nsight Compute / Nsight Systems).
+      - name: nvidia-cuda-toolkit
+        files:
+          - "/usr/local/cuda-{{ _cuda_mm }}/EULA.txt"
+        packages: []
+        required: true
+      # The driver package's own license (the "NVIDIA Driver License Agreement"
+      # in the Ubuntu 595-server packages). Fabric Manager, NSCQ and IMEX ship
+      # "License For Customer Use of NVIDIA Software" in their own packages and
+      # are collected separately below.
+      - name: nvidia-driver
+        files: []
+        packages: "{{ ['nvidia-kernel-common-' ~ (nvidia_driver_package_version | default(''))] if _is_deb else ['nvidia-driver'] }}"
+        required: true
+      - name: nvidia-fabricmanager
+        files: []
+        packages: ["nvidia-fabricmanager*"]
+        required: true
+      # NSCQ is installed with the driver on Ubuntu and with Fabric Manager on
+      # Rocky; IMEX only on Ubuntu arm64.
+      - name: libnvidia-nscq
+        files: []
+        packages: ["libnvidia-nscq*"]
+        required: true
+      - name: nvidia-imex
+        files: []
+        packages: ["nvidia-imex*"]
+        required: "{{ (_is_deb | bool) and (ansible_facts['architecture'] in ['aarch64', 'arm64']) }}"
+      # DCGM EULA (Jan 22, 2021).
+      - name: nvidia-dcgm
+        files: []
+        packages: ["datacenter-gpu-manager-4-core"]
+        required: "{{ install_dcgm | default(false) | bool }}"
+      # cuDNN Software License Agreement.
+      - name: nvidia-cudnn
+        files: []
+        packages: ["libcudnn9-cuda-{{ _cuda_major }}"]
+        required: "{{ install_cudnn | default(true) | bool }}"
+  vars:
+    _is_deb: "{{ ansible_facts['os_family'] == 'Debian' }}"
+    _cuda_mm: "{{ cuda_version.split('.')[:2] | join('.') }}"
+    _cuda_major: "{{ cuda_version.split('.')[0] }}"
+
+- name: Copy NVIDIA license texts into the consolidated license directory
+  ansible.builtin.shell: |
+    set -euo pipefail
+    list=$(mktemp)
+    trap 'rm -f "$list"' EXIT
+    add() { if [ -f "$1" ]; then readlink -f "$1" >> "$list"; fi; }
+
+    {% for f in item.files %}
+    add "{{ f }}"
+    {% endfor %}
+    {% for p in item.packages %}
+    {% if ansible_facts['os_family'] == 'Debian' %}
+    # Installed packages show as "ii", or "hi" when held (the driver, cuDNN
+    # and DCGM packages are held at their pinned versions).
+    for pkg in $(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' '{{ p }}' 2>/dev/null | awk '$1 ~ /^[ih]i/ {print $2}'); do
+      add "/usr/share/doc/${pkg}/copyright"
+      for f in $(dpkg -L "$pkg" | awk -F/ '$NF ~ /^(LICENSE|EULA)[^\/]*$/'); do add "$f"; done
+    done
+    {% else %}
+    for pkg in $(rpm -qa --qf '%{NAME}\n' '{{ p }}'); do
+      for f in $(rpm -qL "$pkg"); do add "$f"; done
+    done
+    {% endif %}
+    {% endfor %}
+
+    sort -u -o "$list" "$list"
+    # Some packages ship compressed texts (IMEX: LICENSE.gz), so every file is
+    # read with "gzip -dcf": it decompresses .gz files and passes plain text
+    # through unchanged.
+    # Keep one copy of identical texts (DCGM ships the same license as both
+    # LICENSE and copyright).
+    if [ -s "$list" ]; then
+      while IFS= read -r f; do
+        printf '%s %s\n' "$(gzip -dcf "$f" | sha256sum | cut -d' ' -f1)" "$f"
+      done < "$list" | sort -k1,1 -u | cut -d' ' -f2- | sort > "$list.u"
+      mv "$list.u" "$list"
+    fi
+    if [ ! -s "$list" ]; then
+      echo "No license text found for {{ item.name }}" >&2
+      exit 3
+    fi
+
+    dest="{{ license_dir }}/{{ item.name }}"
+    if [ "$(wc -l < "$list")" -eq 1 ]; then
+      gzip -dcf "$(cat "$list")" > "$dest"
+    else
+      while IFS= read -r f; do
+        printf '==> %s <==\n' "$f"
+        gzip -dcf "$f"
+        printf '\n'
+      done < "$list" > "$dest"
+    fi
+    chmod 0644 "$dest"
+    # The bundled copy must be readable text, not binary data.
+    if [ "$(tr -d '\000' < "$dest" | wc -c)" -ne "$(wc -c < "$dest")" ]; then
+      echo "Binary data in $dest" >&2
+      rm -f "$dest"
+      exit 4
+    fi
+    cat "$list"
+  args:
+    executable: /bin/bash
+  loop: "{{ nvidia_license_sources }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: nvidia_license_copy
+  changed_when: nvidia_license_copy.rc == 0
+  failed_when: nvidia_license_copy.rc != 0 and (item.required | bool)
+  become: true
+
+- name: Write NVIDIA license inventory
+  ansible.builtin.copy:
+    dest: "{{ output_file | dirname }}/nvidia-license-inventory.txt"
+    mode: "0644"
+    content: |
+      # NVIDIA license texts bundled in {{ license_dir }} and their package-native sources.
+      {% for res in nvidia_license_copy.results %}
+      {{ res.item.name }}: {{ (res.stdout_lines | join(', ')) if res.rc == 0 else 'NOT INSTALLED' }}
+      {% endfor %}
+  become: true

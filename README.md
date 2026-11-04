@@ -79,5 +79,11 @@ To build in specific zones or target a different region with available capacity,
 gcloud builds submit --project YOUR_PROJECT_ID --config=cloudbuild.yaml --substitutions=_ZONES="us-east4-a,us-east4-b,us-east4-c"
 ```
 
+### Updating the NVIDIA driver
+
+The NVIDIA driver, Fabric Manager and NSCQ (and IMEX on Ubuntu arm64) must be the same release. Build profiles with `verify_nvidia_versions = true` (the 2605 profiles) fail the build if they differ. Build profiles that install the NVIDIA stack set `fabric_manager_version` (and `fabricmanager_deb` on Ubuntu); the Ubuntu 2605 profiles also pin the driver with `nvidia_driver_version` (the exact Ubuntu archive version), and Rocky installs `cuda-drivers-<fabric_manager_version>` and `libnvidia-nscq-<fabric_manager_version>`.
+
+The Ubuntu archive keeps only the newest release of each driver branch (for example `595-server`). When Ubuntu publishes a new one, the pinned version disappears and Ubuntu builds fail at install until the profiles are updated. To move to a new driver release, change these values together in every affected profile.
+
 <!-- Copybara export test (safe to delete): line before the internal block, expected on GitHub. -->
 <!-- Copybara export test (safe to delete): line after the internal block, expected on GitHub. -->
