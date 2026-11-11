@@ -123,6 +123,110 @@
         - ansible_facts['distribution_major_version'] == '9'
         - install_slurm | default(false) | bool
 
+    # Ensure Rocky 8 and Rocky 9 images preserve legacy eth0 naming and the
+    # net.ifnames=0 / biosdevname=0 kernel boot parameters. Slurm-GCP's
+    # cgroups/grub_cmdline role can overwrite GRUB_CMDLINE_LINUX="" when
+    # cgroup_grub_cmdline_linux is empty, stripping these flags from Rocky 8
+    # BLS $kernelopts (resulting in ens*/enx* interface names).
+    - name: Verify RedHat kernel cmdline and eth0 network interface naming
+      when:
+        - ansible_facts['os_family'] == "RedHat"
+        - ansible_facts['distribution_major_version'] in ['8', '9']
+      block:
+        - name: Read /proc/cmdline
+          ansible.builtin.slurp:
+            src: /proc/cmdline
+          register: proc_cmdline_raw
+
+        - name: Parse /proc/cmdline tokens
+          ansible.builtin.set_fact:
+            proc_cmdline_tokens: "{{ (proc_cmdline_raw.content | b64decode).split() }}"
+
+        - name: Assert net.ifnames=0 and biosdevname=0 are present in /proc/cmdline
+          ansible.builtin.assert:
+            that:
+              - "'net.ifnames=0' in proc_cmdline_tokens"
+              - "'biosdevname=0' in proc_cmdline_tokens"
+            fail_msg: >-
+              Expected 'net.ifnames=0' and 'biosdevname=0' in /proc/cmdline,
+              got: {{ proc_cmdline_raw.content | b64decode | trim }}
+
+        - name: Assert primary network interface is named eth0
+          ansible.builtin.assert:
+            that:
+              - "ansible_facts['default_ipv4']['interface'] is defined"
+              - "ansible_facts['default_ipv4']['interface'] == 'eth0'"
+            fail_msg: >-
+              Expected primary network interface 'eth0',
+              got '{{ ansible_facts['default_ipv4']['interface'] | default('undefined') }}'
+              (interfaces: {{ ansible_facts['interfaces'] | default([]) }}).
+
+    # Verify Ansible build virtualenv and CLI symlink presence.
+    # On Rocky 8, /opt/ansible-venv and /usr/bin/ansible* symlinks must be removed
+    # during image cleanup to prevent Python 3.6 / 3.12 conflicts with Cluster
+    # Toolkit. On all other OS distributions (e.g. Rocky 9, Ubuntu), Ansible
+    # must remain pre-installed in /opt/ansible-venv with CLI symlinks in /usr/bin.
+    - name: Verify Ansible build venv and symlink state
+      block:
+        - name: Check if /opt/ansible-venv exists
+          ansible.builtin.stat:
+            path: /opt/ansible-venv
+          register: opt_ansible_venv_stat
+
+        - name: Check if /usr/bin/ansible-playbook exists
+          ansible.builtin.stat:
+            path: /usr/bin/ansible-playbook
+          register: usr_bin_ansible_playbook_stat
+
+        - name: Check if pre-boot image Ansible state was recorded
+          ansible.builtin.stat:
+            path: /run/image-ansible-state.json
+          register: preboot_ansible_state_stat
+
+        - name: Read pre-boot image Ansible state if recorded
+          ansible.builtin.slurp:
+            src: /run/image-ansible-state.json
+          register: preboot_ansible_state_raw
+          when: preboot_ansible_state_stat.stat.exists
+
+        - name: Parse pre-boot image Ansible state
+          ansible.builtin.set_fact:
+            preboot_ansible_state: "{{ preboot_ansible_state_raw.content | b64decode | from_json }}"
+          when: preboot_ansible_state_stat.stat.exists
+
+        - name: Assert Ansible build venv and symlinks are absent on Rocky 8
+          ansible.builtin.assert:
+            that:
+              - not opt_ansible_venv_stat.stat.exists
+              - not usr_bin_ansible_playbook_stat.stat.exists
+              - preboot_ansible_state is not defined or not preboot_ansible_state.ansible_venv_present
+              - preboot_ansible_state is not defined or not preboot_ansible_state.ansible_symlink_present
+            fail_msg: >-
+              Expected /opt/ansible-venv and /usr/bin/ansible-playbook to be removed on Rocky 8
+              during cleanup, but found preboot venv={{ preboot_ansible_state.ansible_venv_present | default('N/A') }},
+              preboot symlink={{ preboot_ansible_state.ansible_symlink_present | default('N/A') }},
+              current /opt/ansible-venv exists={{ opt_ansible_venv_stat.stat.exists }},
+              current /usr/bin/ansible-playbook exists={{ usr_bin_ansible_playbook_stat.stat.exists }}.
+          when:
+            - ansible_facts['distribution'] | lower == 'rocky'
+            - ansible_facts['distribution_major_version'] == '8'
+
+        - name: Assert Ansible build venv and symlinks are present on non-Rocky-8 images
+          ansible.builtin.assert:
+            that:
+              - opt_ansible_venv_stat.stat.exists
+              - usr_bin_ansible_playbook_stat.stat.exists
+              - preboot_ansible_state is not defined or preboot_ansible_state.ansible_venv_present
+              - preboot_ansible_state is not defined or preboot_ansible_state.ansible_symlink_present
+            fail_msg: >-
+              Expected /opt/ansible-venv and /usr/bin/ansible-playbook to be pre-installed on
+              {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_major_version'] }} image,
+              but found preboot venv={{ preboot_ansible_state.ansible_venv_present | default('N/A') }},
+              preboot symlink={{ preboot_ansible_state.ansible_symlink_present | default('N/A') }},
+              current /opt/ansible-venv exists={{ opt_ansible_venv_stat.stat.exists }},
+              current /usr/bin/ansible-playbook exists={{ usr_bin_ansible_playbook_stat.stat.exists }}.
+          when: not (ansible_facts['distribution'] | lower == 'rocky' and ansible_facts['distribution_major_version'] == '8')
+
   rescue:
     - name: Use the failure_recorder role to log this failure
       ansible.builtin.include_role:

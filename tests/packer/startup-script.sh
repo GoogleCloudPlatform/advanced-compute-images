@@ -22,18 +22,22 @@ echo "The OS ID is: ${OS_ID} (${OS_VERSION_ID})"
 
 # Version Pinning & Path Configurations
 if [[ "${OS_ID}" == "rocky" && "${OS_VERSION_ID}" == "8" ]]; then
-  # Rocky 8 uses Python 3.6 as system python, requiring Ansible 4.10.0 pinned to python3.6
+  # Rocky 8 uses Python 3.6 as system python, requiring Ansible 4.10.0 pinned to python3.6.
+  # Use a temporary test-runner venv in /tmp so /opt/ansible-venv and /usr/bin/ansible*
+  # remain absent, preserving the clean image state verified by tests.
   ANSIBLE_VERSION="4.10.0"
   PYTHON_CMD="python3.6"
+  ANSIBLE_VENV_DIR="/tmp/ansible-test-venv"
 elif [[ "${OS_ID}" == "ubuntu" && "${OS_VERSION_ID}" == "24" ]]; then
   ANSIBLE_VERSION="10.3.0"
   PYTHON_CMD="python3"
+  ANSIBLE_VENV_DIR="${ANSIBLE_VENV_DIR:-/opt/ansible-venv}"
 else
   ANSIBLE_VERSION="8.7.0"
   PYTHON_CMD="python3"
+  ANSIBLE_VENV_DIR="${ANSIBLE_VENV_DIR:-/opt/ansible-venv}"
 fi
 echo "Pinned Ansible version: ${ANSIBLE_VERSION}"
-ANSIBLE_VENV_DIR="${ANSIBLE_VENV_DIR:-/opt/ansible-venv}"
 
 # Helper function to print clean, tagged logs to the console AND main log file
 function log_setup() {
@@ -152,6 +156,26 @@ EOF
 
 log_setup "--- STARTING PACKER SETUP ---"
 
+# Capture image pre-installed Ansible venv and symlink state before any test runner setup.
+# On Rocky 8, /opt/ansible-venv and /usr/bin/ansible* symlinks must have been cleaned up.
+# On all other OSes, they must be pre-installed on the baked image.
+IMAGE_ANSIBLE_VENV_PRESENT=false
+if [[ -d "/opt/ansible-venv" ]]; then
+  IMAGE_ANSIBLE_VENV_PRESENT=true
+fi
+IMAGE_ANSIBLE_SYMLINK_PRESENT=false
+if [[ -e "/usr/bin/ansible-playbook" || -L "/usr/bin/ansible-playbook" ]]; then
+  IMAGE_ANSIBLE_SYMLINK_PRESENT=true
+fi
+
+mkdir -p /run
+cat <<EOF > /run/image-ansible-state.json
+{
+  "ansible_venv_present": ${IMAGE_ANSIBLE_VENV_PRESENT},
+  "ansible_symlink_present": ${IMAGE_ANSIBLE_SYMLINK_PRESENT}
+}
+EOF
+
 # 1. Wait for apt lock / cloud-init if available
 if [[ -x "/usr/bin/cloud-init" ]]; then
   /usr/bin/cloud-init status --wait > "$DEBUG_LOG" 2>&1
@@ -204,9 +228,11 @@ log_setup "Installing ansible.posix collection..."
 # 2. Run Tests
 log_setup "--- RUNNING TESTS ---"
 TEST_START_TIME=$(date +%s)
-ln -sf "${ANSIBLE_VENV_DIR}/bin/ansible" /usr/bin/ansible
-ln -sf "${ANSIBLE_VENV_DIR}/bin/ansible-playbook" /usr/bin/ansible-playbook
-ln -sf "${ANSIBLE_VENV_DIR}/bin/ansible-galaxy" /usr/bin/ansible-galaxy
+if [[ "${OS_ID}" != "rocky" || "${OS_VERSION_ID}" != "8" ]]; then
+  ln -sf "${ANSIBLE_VENV_DIR}/bin/ansible" /usr/bin/ansible
+  ln -sf "${ANSIBLE_VENV_DIR}/bin/ansible-playbook" /usr/bin/ansible-playbook
+  ln -sf "${ANSIBLE_VENV_DIR}/bin/ansible-galaxy" /usr/bin/ansible-galaxy
+fi
 pushd /tmp/tests
 # Read test results GCS path from metadata
 TEST_RESULTS_GCS_PATH=$(curl -f -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/test-results-gcs-path" || echo "")
