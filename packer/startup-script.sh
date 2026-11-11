@@ -165,11 +165,17 @@ log_setup "Ansible finished in $((ANSIBLE_END_TIME - ANSIBLE_START_TIME)) second
 function run_cleanup() {
   log_setup "--- Running Final Cleanup Script ---"
   local build_user="packer"
-  # Remove virtual environment build artifact
-  if [[ -d "${ANSIBLE_VENV_DIR}" ]]; then
-    log_setup "Removing virtual environment ${ANSIBLE_VENV_DIR}..."
-    rm -rf "${ANSIBLE_VENV_DIR}"
-    rm -f /usr/bin/ansible /usr/bin/ansible-playbook /usr/bin/ansible-galaxy
+  # Scope removal of the build virtual environment and symlinks strictly to Rocky 8.
+  # On Rocky 8, leaving /usr/bin/ansible-playbook symlinked to /opt/ansible-venv
+  # (Ansible 4.10.0 on Python 3.6) causes Cluster Toolkit's install_ansible.sh
+  # to skip updating the symlink while setting interpreter_python to Python 3.12,
+  # breaking configure-ssh.yml. Other OSes retain /opt/ansible-venv on the image.
+  if [[ "${OS_ID}" == "rocky" && "${OS_VERSION_ID}" == "8" ]]; then
+    if [[ -d "${ANSIBLE_VENV_DIR}" ]]; then
+      log_setup "Removing virtual environment ${ANSIBLE_VENV_DIR}..."
+      rm -rf "${ANSIBLE_VENV_DIR}"
+      rm -f /usr/bin/ansible /usr/bin/ansible-playbook /usr/bin/ansible-galaxy
+    fi
   fi
   # Truncate major logs
   truncate -s 0 /var/log/syslog
