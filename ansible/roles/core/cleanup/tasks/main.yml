@@ -79,6 +79,106 @@
   when: ansible_facts['distribution'] == "Ubuntu"
 
 # -----------------------------------------------------------------
+#  Vulnerability Hardening & Package Upgrades
+# -----------------------------------------------------------------
+- name: Upgrade remaining unheld Ubuntu packages to latest security patches
+  become: true
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: dist
+    dpkg_options: "force-confdef,force-confold"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when: ansible_facts['distribution'] == "Ubuntu"
+
+- name: Check if /opt/ansible-venv pip exists
+  ansible.builtin.stat:
+    path: /opt/ansible-venv/bin/pip
+  register: ansible_venv_pip
+
+- name: Upgrade core Python packages in /opt/ansible-venv
+  become: true
+  ansible.builtin.pip:
+    name:
+      - pip>=26.0
+      - setuptools>=78.1.1
+      - wheel>=0.46.2
+    virtualenv: /opt/ansible-venv
+    state: latest
+  when: ansible_venv_pip.stat.exists
+
+- name: Find vulnerable bundled Python wheels across system and Slurm directories
+  ansible.builtin.find:
+    paths:
+      - /usr/share/python-wheels
+      - /usr/lib/python3.12/test/wheeldata
+      - /slurm/python/lib/python3.13/test/wheeldata
+      - /slurm/python/lib/python3.13/ensurepip/_bundled
+    patterns:
+      - "pip-*.whl"
+      - "setuptools-*.whl"
+      - "wheel-*.whl"
+  register: bundled_python_wheels
+
+- name: Download patched replacement Python wheels into each matched directory
+  become: true
+  ansible.builtin.command:
+    cmd: >-
+      /opt/ansible-venv/bin/pip download --no-deps
+      --dest {{ item.path | dirname }}
+      {{ (item.path | basename).split('-')[0] }}
+  loop: "{{ bundled_python_wheels.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: ansible_venv_pip.stat.exists
+
+- name: Remove superseded bundled Python wheels after replacement download
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ bundled_python_wheels.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: ansible_venv_pip.stat.exists
+
+- name: Find existing system wheel dist-info directories on Ubuntu
+  ansible.builtin.find:
+    paths: /usr/lib/python3/dist-packages
+    patterns:
+      - "wheel-*.dist-info"
+      - "wheel-*.egg-info"
+    file_type: directory
+  register: old_system_wheel_distinfo
+  when: ansible_facts['distribution'] == "Ubuntu"
+
+- name: Upgrade system Python wheel package on Ubuntu
+  become: true
+  ansible.builtin.pip:
+    name:
+      - wheel>=0.46.2
+    executable: /opt/ansible-venv/bin/pip
+    extra_args: "--no-deps --target /usr/lib/python3/dist-packages"
+    state: latest
+  when:
+    - ansible_facts['distribution'] == "Ubuntu"
+    - ansible_venv_pip.stat.exists
+    - (old_system_wheel_distinfo.matched | default(0)) > 0
+
+- name: Remove superseded system wheel dist-info directories on Ubuntu
+  become: true
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ old_system_wheel_distinfo.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when:
+    - ansible_facts['distribution'] == "Ubuntu"
+    - ansible_venv_pip.stat.exists
+    - (old_system_wheel_distinfo.matched | default(0)) > 0
+
+# -----------------------------------------------------------------
 #  System Cleanups
 # -----------------------------------------------------------------
 - name: Clean Package Manager Caches (Debian)

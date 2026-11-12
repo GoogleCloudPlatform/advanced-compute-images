@@ -150,6 +150,17 @@
     state: present
     update_cache: false
 
+- name: Freeze NVIDIA Container Toolkit package versions
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - nvidia-container-toolkit
+    - nvidia-container-toolkit-base
+    - libnvidia-container-tools
+    - libnvidia-container1
+  become: true
+
 # ---------- Install NVIDIA Driver Components ----------
 - name: Set NVIDIA Driver packages fact
   ansible.builtin.set_fact:
@@ -215,6 +226,12 @@
 - name: Install Fabric Manager from .deb
   ansible.builtin.apt:
     deb: "{{ nvidia_installation_path }}/{{ fabricmanager_deb }}"
+  become: true
+
+- name: Freeze Fabric Manager package version
+  ansible.builtin.dpkg_selections:
+    name: nvidia-fabricmanager
+    selection: hold
   become: true
 
 # ---------- Install NVIDIA DOCA ----------

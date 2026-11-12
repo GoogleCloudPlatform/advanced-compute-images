@@ -28,4 +28,4 @@
 - name: Install Gcsfuse
   ansible.builtin.apt:
     name: gcsfuse
-    state: present
+    state: latest

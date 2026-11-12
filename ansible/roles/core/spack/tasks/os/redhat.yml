@@ -26,7 +26,9 @@
   become: true
   ansible.builtin.pip:
     name:
+      - pip
       - setuptools
+      - wheel
       - google-cloud-storage
       - google-auth<2.38.0
       - cffi
@@ -34,9 +36,12 @@
       - urllib3
       - requests
       - pyyaml
+      - pyasn1
+      - certifi
+      - idna
     virtualenv: /opt/spack-venv
     virtualenv_command: "/usr/bin/python3.11 -m venv"
-    state: present
+    state: latest
 
 - name: Ensure machine-id is initialized for package scriptlets
   command: systemd-machine-id-setup

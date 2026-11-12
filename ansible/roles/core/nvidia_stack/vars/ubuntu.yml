@@ -21,7 +21,7 @@ _cuda_suffix: "{{ '' if ansible_facts['architecture'] == 'x86_64' else '_sbsa' }
 
 cuda_installer_file_name: "cuda_{{cuda_version}}_{{fabric_manager_version}}_linux{{ _cuda_suffix }}.run"
 cuda_runfile_url: "https://developer.download.nvidia.com/compute/cuda/{{ cuda_version }}/local_installers/{{ cuda_installer_file_name }}"
-nvidia_container_toolkit_version: "1.19.0-1"
+nvidia_container_toolkit_version: "1.20.2-1"
 nvidia_driver_package_version: "580-server"
 fabricmanager_deb: "nvidia-fabricmanager_{{fabric_manager_version}}-1_{{ _pkg_arch }}.deb"
 doca_version: "3.2.1"

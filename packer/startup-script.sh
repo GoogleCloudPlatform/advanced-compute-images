@@ -31,7 +31,7 @@ if [[ "${OS_ID}" == "rocky" && "${OS_VERSION_ID}" == "8" ]]; then
   ANSIBLE_VERSION="4.10.0"
   PYTHON_CMD="python3.6"
 elif [[ "${OS_ID}" == "ubuntu" && "${OS_VERSION_ID}" == "24" ]]; then
-  ANSIBLE_VERSION="10.3.0"
+  ANSIBLE_VERSION="12.2.0"
   PYTHON_CMD="python3"
 else
   ANSIBLE_VERSION="8.7.0"
@@ -90,7 +90,7 @@ function install_ansible_using_apt(){
   apt-get install -f -y && \
   apt-get install -y software-properties-common python3-pip python3-venv python3-full && \
   ${PYTHON_CMD} -m venv "${ANSIBLE_VENV_DIR}" && \
-  "${ANSIBLE_VENV_DIR}/bin/pip" install --upgrade pip && \
+  "${ANSIBLE_VENV_DIR}/bin/pip" install --upgrade pip setuptools wheel && \
   "${ANSIBLE_VENV_DIR}/bin/pip" install "ansible==${ANSIBLE_VERSION}"
 }
 
@@ -101,7 +101,7 @@ function install_ansible_using_dnf(){
   dnf makecache --refresh >> "$DEBUG_LOG" 2>&1 && \
   dnf install -y epel-release python3 python3-pip perl-devel gcc make libffi-devel >> "$DEBUG_LOG" 2>&1 && \
   ${PYTHON_CMD} -m venv "${ANSIBLE_VENV_DIR}" >> "$DEBUG_LOG" 2>&1 && \
-  "${ANSIBLE_VENV_DIR}/bin/pip" install --upgrade pip >> "$DEBUG_LOG" 2>&1 && \
+  "${ANSIBLE_VENV_DIR}/bin/pip" install --upgrade pip setuptools wheel >> "$DEBUG_LOG" 2>&1 && \
   "${ANSIBLE_VENV_DIR}/bin/pip" install "ansible==${ANSIBLE_VERSION}" >> "$DEBUG_LOG" 2>&1
 }
 

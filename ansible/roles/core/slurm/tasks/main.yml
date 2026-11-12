@@ -70,6 +70,27 @@
       args:
         executable: /bin/bash
 
+    - name: Patch slurm-gcp gcsfuse role to install latest gcsfuse on Debian/Ubuntu
+      ansible.builtin.replace:
+        path: /opt/slurm-gcp-repo/ansible/roles/gcsfuse/tasks/os/debian.yml
+        regexp: '(-\s*name:\s*Install Gcsfuse\s*\n\s*ansible\.builtin\.apt:\s*\n\s*name:\s*gcsfuse\s*\n\s*state:\s*)present'
+        replace: '\1latest'
+
+    - name: Patch slurm-gcp lmod and ompi git tasks to remove shallow depth for ansible-core 2.19 compatibility
+      ansible.builtin.replace:
+        path: "{{ item }}"
+        regexp: '^\s*depth:\s*[''"]?1[''"]?\s*\n'
+        replace: ''
+      loop:
+        - /opt/slurm-gcp-repo/ansible/roles/lmod/tasks/main.yml
+        - /opt/slurm-gcp-repo/ansible/roles/ompi/tasks/main.yml
+
+    - name: Remove redundant lmod dependency from slurm-gcp ompi role meta
+      ansible.builtin.replace:
+        path: /opt/slurm-gcp-repo/ansible/roles/ompi/meta/main.yml
+        regexp: '^\s*-\s*role:\s*lmod\s*\n'
+        replace: ''
+
     - name: Mark nvidia-container-toolkit packages as held
       ansible.builtin.dpkg_selections:
         name: "{{ item }}"
@@ -143,6 +164,15 @@
         filename: mariadb
       when:
         - ansible_facts['distribution'] == "Ubuntu"
+        - slurm_mariadb_upstream_repo | bool
+
+    - name: Enable MariaDB 10.11 AppStream module on RedHat/Rocky
+      ansible.builtin.shell: |
+        dnf module reset -y mariadb || true
+        dnf module enable -y mariadb:10.11
+      when:
+        - ansible_facts['os_family'] == "RedHat"
+        - ansible_facts['distribution_major_version'] == "9"
         - slurm_mariadb_upstream_repo | bool
 
     - name: Remove hdf5 package blocking on Ubuntu
@@ -245,6 +275,35 @@
       environment:
         ANSIBLE_STDOUT_CALLBACK: yaml
         PYTHONUNBUFFERED: "1"
+
+    - name: Upgrade vulnerable Python packages in /slurm/python/venv
+      ansible.builtin.pip:
+        name:
+          - pip
+          - setuptools
+          - wheel
+          - virtualenv
+          - filelock
+          - urllib3
+          - certifi
+          - pyasn1
+          - oauthlib
+          - requests
+          - idna
+          - httplib2
+          - Pygments
+        virtualenv: /slurm/python/venv
+        state: latest
+
+    - name: Upgrade vulnerable Python packages in base /slurm/python installation
+      ansible.builtin.pip:
+        name:
+          - pip
+          - setuptools
+          - wheel
+        executable: /slurm/python/bin/pip3.13
+        state: latest
+      failed_when: false
 
     - name: Ensure TPU topology configuration file is available for worker plugins
       ansible.builtin.copy:

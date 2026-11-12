@@ -29,7 +29,7 @@ if [[ "${OS_ID}" == "rocky" && "${OS_VERSION_ID}" == "8" ]]; then
   PYTHON_CMD="python3.6"
   ANSIBLE_VENV_DIR="/tmp/ansible-test-venv"
 elif [[ "${OS_ID}" == "ubuntu" && "${OS_VERSION_ID}" == "24" ]]; then
-  ANSIBLE_VERSION="10.3.0"
+  ANSIBLE_VERSION="12.2.0"
   PYTHON_CMD="python3"
   ANSIBLE_VENV_DIR="${ANSIBLE_VENV_DIR:-/opt/ansible-venv}"
 else

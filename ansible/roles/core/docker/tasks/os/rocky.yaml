@@ -36,7 +36,7 @@
 - name: Install Docker CE and plugins
   ansible.builtin.yum:
     name: "{{item}}"
-    state: present
+    state: latest
   loop:
     - docker-ce
     - docker-ce-cli
@@ -47,5 +47,5 @@
 - name: Install docker-model-plugin on Rocky 9+
   ansible.builtin.yum:
     name: docker-model-plugin
-    state: present
+    state: latest
   when: ansible_facts['distribution_major_version'] | int >= 9

@@ -18,7 +18,7 @@ cuda_toolkit_version: "13-0"
 cuda_repo_url: "https://developer.download.nvidia.com/compute/cuda/repos/rhel{{ ansible_facts['distribution_major_version'] }}/x86_64/cuda-rhel{{ ansible_facts['distribution_major_version']
   }}.repo"
 cuda_gpg_key_url: "https://developer.download.nvidia.com/compute/cuda/repos/rhel{{ ansible_facts['distribution_major_version'] }}/x86_64/D42D0685.pub"
-nvidia_container_toolkit_version: "1.17.8-1"
+nvidia_container_toolkit_version: "1.20.2-1"
 nvidia_driver_package_version: "580-dkms"
 fabric_manager_version: "580.65.06"
 doca_version: "3.2.1"
