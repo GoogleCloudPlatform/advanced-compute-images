@@ -13,25 +13,41 @@
 # limitations under the License.
 
 ---
-- name: Ensure GCP kernel metapackages are installed for TPU images
+- name: Ensure GCP kernel packages matching running kernel are installed for TPU images
   ansible.builtin.apt:
     name:
-      - linux-image-gcp
-      - linux-headers-gcp
-      - linux-gcp
+      - "linux-image-{{ ansible_facts['kernel'] }}"
+      - "linux-headers-{{ ansible_facts['kernel'] }}"
+      - "linux-modules-{{ ansible_facts['kernel'] }}"
+      - "linux-modules-extra-{{ ansible_facts['kernel'] }}"
+      - "linux-tools-{{ ansible_facts['kernel'] }}"
     state: present
   become: true
   when: hw_type == "tpu"
+
+- name: Gather installed package facts
+  ansible.builtin.package_facts:
+    manager: apt
+  become: true
 
 - name: Hold kernel packages to prevent upgrades
   ansible.builtin.dpkg_selections:
     name: "{{ item }}"
     selection: hold
   loop:
+    - "linux-image-{{ ansible_facts['kernel'] }}"
+    - "linux-headers-{{ ansible_facts['kernel'] }}"
+    - "linux-modules-{{ ansible_facts['kernel'] }}"
+    - "linux-modules-extra-{{ ansible_facts['kernel'] }}"
+    - "linux-tools-{{ ansible_facts['kernel'] }}"
     - linux-image-gcp
     - linux-headers-gcp
+    - linux-modules-gcp
+    - linux-modules-extra-gcp
+    - linux-tools-gcp
     - linux-gcp
   become: true
+  when: item in ansible_facts.packages
 
 # ---------- Update Kernel and Reboot (Multi-Stage Pattern) ----------
 - name: Check if Ubuntu OS preparation (pre-reboot) is complete
