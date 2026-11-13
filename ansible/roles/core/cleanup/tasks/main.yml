@@ -107,6 +107,18 @@
     state: latest
   when: ansible_venv_pip.stat.exists
 
+- name: Upgrade ansible-core in /opt/ansible-venv on Rocky 9
+  become: true
+  ansible.builtin.pip:
+    name:
+      - ansible-core>=2.16.13
+    virtualenv: /opt/ansible-venv
+    state: latest
+  when:
+    - ansible_venv_pip.stat.exists
+    - ansible_facts['distribution'] | lower == "rocky"
+    - ansible_facts['distribution_major_version'] | string == "9"
+
 - name: Find vulnerable bundled Python wheels across system and Slurm directories
   ansible.builtin.find:
     paths:

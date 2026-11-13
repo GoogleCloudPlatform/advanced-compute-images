@@ -28,6 +28,10 @@ if [[ "${OS_ID}" == "rocky" && "${OS_VERSION_ID}" == "8" ]]; then
   ANSIBLE_VERSION="4.10.0"
   PYTHON_CMD="python3.6"
   ANSIBLE_VENV_DIR="/tmp/ansible-test-venv"
+elif [[ "${OS_ID}" == "rocky" && "${OS_VERSION_ID}" == "9" ]]; then
+  ANSIBLE_VERSION="12.2.0"
+  PYTHON_CMD="python3.11"
+  ANSIBLE_VENV_DIR="${ANSIBLE_VENV_DIR:-/opt/ansible-venv}"
 elif [[ "${OS_ID}" == "ubuntu" && "${OS_VERSION_ID}" == "24" ]]; then
   ANSIBLE_VERSION="12.2.0"
   PYTHON_CMD="python3"
@@ -103,9 +107,13 @@ function install_ansible_using_dnf(){
     log_setup "Ansible is already installed in ${ANSIBLE_VENV_DIR}. Skipping reinstall."
     return 0
   fi
+  local dnf_pkgs=(epel-release python3 python3-pip perl-devel gcc make libffi-devel)
+  if [[ "${OS_ID}" == "rocky" && "${OS_VERSION_ID}" == "9" ]]; then
+    dnf_pkgs+=(python3.11 python3.11-pip)
+  fi
   dnf clean all >> "$DEBUG_LOG" 2>&1 && \
   dnf makecache --refresh --setopt=*.skip_if_unavailable=true >> "$DEBUG_LOG" 2>&1 && \
-  dnf install -y --setopt=*.skip_if_unavailable=true epel-release python3 python3-pip perl-devel gcc make libffi-devel >> "$DEBUG_LOG" 2>&1 && \
+  dnf install -y --setopt=*.skip_if_unavailable=true "${dnf_pkgs[@]}" >> "$DEBUG_LOG" 2>&1 && \
   ${PYTHON_CMD} -m venv "${ANSIBLE_VENV_DIR}" >> "$DEBUG_LOG" 2>&1 && \
   "${ANSIBLE_VENV_DIR}/bin/pip" install --upgrade pip >> "$DEBUG_LOG" 2>&1 && \
   "${ANSIBLE_VENV_DIR}/bin/pip" install "ansible==${ANSIBLE_VERSION}" >> "$DEBUG_LOG" 2>&1

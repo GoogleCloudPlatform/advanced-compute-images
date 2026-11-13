@@ -180,7 +180,7 @@
     failed_when: nvidia_modinfo.rc != 0
     when:
       - ansible_facts['os_family'] == "RedHat"
-      - (cuda_runfile_url is defined and (cuda_runfile_url | regex_search('595'))) or (nvidia_driver_package_version is defined and (nvidia_driver_package_version | regex_search('595')))
+      - ((cuda_runfile_url | default('')) is search('595')) or ((nvidia_driver_package_version | default('')) is search('595'))
 
   rescue:
   - name: Use the failure_recorder role to log this failure

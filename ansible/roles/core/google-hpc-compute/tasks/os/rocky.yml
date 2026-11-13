@@ -51,7 +51,9 @@
         state: touch
     - name: Trigger reboot to apply changes
       ansible.builtin.shell: sleep 5 && rm -rf /tmp/ansible && shutdown -r now "Rebooting after OS preparation"
-      async: 1
+      # ansible-core 2.19 enforces the async time limit: with async: 1 the job is killed
+      # before `sleep 5` finishes and the reboot never happens.
+      async: 120
       poll: 0
       ignore_errors: true # Continue even if shutdown command has issues
   when:
