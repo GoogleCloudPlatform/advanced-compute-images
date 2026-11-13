@@ -14,7 +14,7 @@
 # helm-gcp-releases repo is no longer maintained and is missing the Release file.
 # Remove broken helm-gcp-releases repository that causes apt update to fail.
 # Remove conflicting dkms package to allow installation of kernel-specific lustre client modules in the slurm-gcp playbook.
-# Proactively add Official MariaDB 10.11 LTS Repository to pull patched database builds
+# Proactively add Official MariaDB 10.11 LTS Repository (Ubuntu) or enable the MariaDB 11.8 AppStream module (Rocky 9) to pull patched database builds
 
 ---
 - name: Execute conditionally gated tasks natively
@@ -166,10 +166,34 @@
         - ansible_facts['distribution'] == "Ubuntu"
         - slurm_mariadb_upstream_repo | bool
 
-    - name: Enable MariaDB 10.11 AppStream module on RedHat/Rocky
+    - name: Enable MariaDB 11.8 AppStream module on RedHat/Rocky
       ansible.builtin.shell: |
         dnf module reset -y mariadb || true
-        dnf module enable -y mariadb:10.11
+        dnf module enable -y mariadb:11.8
+      when:
+        - ansible_facts['os_family'] == "RedHat"
+        - ansible_facts['distribution_major_version'] == "9"
+        - slurm_mariadb_upstream_repo | bool
+
+    # MariaDB 11.8 enables innodb_snapshot_isolation by default. slurmdbd does not
+    # support it and exits fatally when a write conflicts with a concurrent transaction.
+    - name: Ensure /etc/my.cnf.d exists on RedHat/Rocky
+      ansible.builtin.file:
+        path: /etc/my.cnf.d
+        state: directory
+        mode: "0755"
+      when:
+        - ansible_facts['os_family'] == "RedHat"
+        - ansible_facts['distribution_major_version'] == "9"
+        - slurm_mariadb_upstream_repo | bool
+
+    - name: Disable innodb_snapshot_isolation for slurmdbd on MariaDB 11.8
+      ansible.builtin.copy:
+        dest: /etc/my.cnf.d/slurm-innodb.cnf
+        content: |
+          [mysqld]
+          innodb_snapshot_isolation=OFF
+        mode: "0644"
       when:
         - ansible_facts['os_family'] == "RedHat"
         - ansible_facts['distribution_major_version'] == "9"
