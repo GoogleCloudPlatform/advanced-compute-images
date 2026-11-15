@@ -227,6 +227,24 @@
               current /usr/bin/ansible-playbook exists={{ usr_bin_ansible_playbook_stat.stat.exists }}.
           when: not (ansible_facts['distribution'] | lower == 'rocky' and ansible_facts['distribution_major_version'] == '8')
 
+    - name: Verify kernel matches BaseOS and kernel-devel is pinned to it on RedHat/Rocky
+      ansible.builtin.shell: |
+        set -e
+        running="$(uname -r)"
+        cores="$(rpm -q kernel-core --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort -u)"
+        echo "running=${running}"; echo "kernel-core installed:"; echo "${cores}"
+        if [ "$(echo "${cores}" | wc -l)" -ne 1 ]; then echo "more than one kernel-core installed" && exit 1; fi
+        if [ "${cores}" != "${running}" ]; then echo "installed kernel-core does not match running kernel" && exit 1; fi
+        rpm -q "kernel-devel-${running}" >/dev/null || { echo "kernel-devel-${running} not installed" && exit 1; }
+        if rpm -q kernel-devel --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' | grep -v -x "${running}" | grep -q .; then
+          echo "kernel-devel for a different kernel is installed" && exit 1
+        fi
+        headers="$(rpm -q kernel-headers --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n')"
+        echo "kernel-headers=${headers}"
+        if [ "${headers}" != "${running}" ]; then echo "kernel-headers does not match running kernel" && exit 1; fi
+      changed_when: false
+      when: ansible_facts['os_family'] == "RedHat"
+
   rescue:
     - name: Use the failure_recorder role to log this failure
       ansible.builtin.include_role:

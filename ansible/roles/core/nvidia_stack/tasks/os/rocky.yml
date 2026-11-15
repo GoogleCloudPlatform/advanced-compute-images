@@ -76,8 +76,9 @@
 - name: Ensure kernel headers and build tools are installed for DKMS
   ansible.builtin.dnf:
     name:
-      - kernel-devel
-      - kernel-headers
+      # Pinned to the running base kernel
+      - "kernel-devel-{{ ansible_facts['kernel'] }}"
+      - "kernel-headers-{{ ansible_facts['kernel'] }}"
       - gcc
       - make
       - dkms

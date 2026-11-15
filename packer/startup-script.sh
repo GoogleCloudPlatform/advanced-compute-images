@@ -103,6 +103,11 @@ function install_ansible_using_dnf(){
   if [[ "${OS_ID}" == "rocky" && "${OS_VERSION_ID}" == "9" ]]; then
     dnf_pkgs+=(python3.11 python3.11-pip)
   fi
+  if [[ "${OS_ID}" == "rocky" ]]; then
+    # gcc pulls in glibc-devel -> kernel-headers; name the running base kernel's headers so dnf
+    # does not install a newer kernel-headers.
+    dnf_pkgs+=("kernel-headers-$(uname -r)")
+  fi
   rm -f /etc/yum.repos.d/parallelstore*.repo >> "$DEBUG_LOG" 2>&1 || true
   dnf clean all >> "$DEBUG_LOG" 2>&1 && \
   dnf makecache --refresh >> "$DEBUG_LOG" 2>&1 && \

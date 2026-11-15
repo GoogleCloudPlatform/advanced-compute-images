@@ -42,7 +42,8 @@
 
 - name: Install Packages
   package:
-    name: "{{common_packages}}"
+    # kernel-devel is pinned to the running base kernel; common_packages keeps the plain name for the manifest.
+    name: "{{ common_packages | map('regex_replace', '^kernel-devel$', 'kernel-devel-' ~ ansible_facts['kernel']) | list }}"
     state: latest
 
 - name: Add /usr/local/bin to PATH

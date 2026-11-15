@@ -131,6 +131,23 @@
     - ansible_facts['distribution'] | lower == "rocky"
     - ansible_facts['distribution_major_version'] | string == "9"
 
+# Slurm-GCP's python role pulls python3-virtualenv (20.21.1) and python3-filelock (3.7.1)
+# into the Rocky 9 system site-packages as build-time dependencies only; nothing on the
+# image requires them afterwards (rpm -q --whatrequires is empty) and the patched versions
+# need Python >= 3.11, so they cannot be upgraded in place on Python 3.9. Remove them.
+- name: Remove unused vulnerable system Python RPMs on Rocky 9
+  become: true
+  ansible.builtin.dnf:
+    name:
+      - python3-virtualenv
+      - python3-filelock
+      - python3-distlib
+      - python3-platformdirs
+    state: absent
+  when:
+    - ansible_facts['distribution'] | lower == "rocky"
+    - ansible_facts['distribution_major_version'] | string == "9"
+
 - name: Find vulnerable bundled Python wheels across system and Slurm directories
   ansible.builtin.find:
     paths:

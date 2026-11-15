@@ -117,11 +117,13 @@
         state: absent
       become: true
 
+    # Ensure kernel modules stays the same as base
     - name: Update all packages
       ansible.builtin.dnf:
         name: "*"
         state: latest
         exclude:
+          - "kernel*"
           - "libfabric*"
           - "perftest*"
           - "rdma-core*"

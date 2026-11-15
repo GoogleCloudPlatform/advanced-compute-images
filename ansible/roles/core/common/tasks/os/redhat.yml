@@ -33,3 +33,19 @@
   changed_when: false
   register: powertools_result
   failed_when: "powertools_result.rc != 0 and 'No matches found for argument' not in powertools_result.stderr"
+
+# Install the kernel development packages for the running base kernel up front so later
+# dependencies (glibc-devel -> kernel-headers, dkms -> kernel-devel-matched -> kernel-core)
+# are satisfied without dnf pulling a newer kernel.
+- name: RedHat | Pin kernel development packages to the running base kernel
+  ansible.builtin.dnf:
+    name:
+      - "kernel-devel-{{ ansible_facts['kernel'] }}"
+      - "kernel-headers-{{ ansible_facts['kernel'] }}"
+    state: present
+
+- name: RedHat | Pin kernel-devel-matched to the running base kernel (Rocky 9)
+  ansible.builtin.dnf:
+    name: "kernel-devel-matched-{{ ansible_facts['kernel'] }}"
+    state: present
+  when: ansible_facts['distribution_major_version'] == '9'
