@@ -96,6 +96,18 @@
     path: /opt/ansible-venv/bin/pip
   register: ansible_venv_pip
 
+# On Rocky 8 /opt/ansible-venv runs Python 3.6, which pip 26 does not support,
+# and the venv is removed at the end of the build. Skip the steps below that
+# use its pip there.
+- name: Skip the /opt/ansible-venv pip steps on Rocky 8
+  ansible.builtin.set_fact:
+    ansible_venv_pip:
+      stat:
+        exists: false
+  when:
+    - ansible_facts['distribution'] | lower == "rocky"
+    - ansible_facts['distribution_major_version'] | string == "8"
+
 - name: Upgrade core Python packages in /opt/ansible-venv
   become: true
   ansible.builtin.pip:
